@@ -863,17 +863,27 @@ export async function _createServer(
     }
   }
 
+  const notifyWatchChange = async (
+    file: string,
+    event: 'create' | 'update' | 'delete',
+  ) => {
+    const results = await Promise.allSettled(
+      Object.values(server.environments).map((environment) =>
+        environment.pluginContainer.watchChange(file, { event }),
+      ),
+    )
+    for (const result of results) {
+      if (result.status === 'rejected') {
+        server.config.logger.error(result.reason)
+      }
+    }
+  }
+
   const onFileAddUnlink = async (file: string, isUnlink: boolean) => {
     file = normalizePath(file)
     reloadOnTsconfigChange(server, file)
 
-    await Promise.all(
-      Object.values(server.environments).map((environment) =>
-        environment.pluginContainer.watchChange(file, {
-          event: isUnlink ? 'delete' : 'create',
-        }),
-      ),
-    )
+    await notifyWatchChange(file, isUnlink ? 'delete' : 'create')
 
     if (publicDir && publicFiles) {
       if (file.startsWith(publicDir)) {
@@ -905,11 +915,7 @@ export async function _createServer(
     file = normalizePath(file)
     reloadOnTsconfigChange(server, file)
 
-    await Promise.all(
-      Object.values(server.environments).map((environment) =>
-        environment.pluginContainer.watchChange(file, { event: 'update' }),
-      ),
-    )
+    await notifyWatchChange(file, 'update')
     // invalidate module graph cache on file change
     for (const environment of Object.values(server.environments)) {
       environment.moduleGraph.onFileChange(file)

@@ -78,7 +78,10 @@ test('watchChange errors do not prevent invalidation or HMR', async () => {
 
   await withTimeout(loggedError.promise, 'watchChange error was not logged')
   await withTimeout(hotUpdateCalled.promise, 'hotUpdate hook was not reached')
-  await waitUntil(() => mod.transformResult == null, 'module was not invalidated')
+  await waitUntil(
+    () => mod.transformResult == null,
+    'module was not invalidated',
+  )
 
   expect(loggedErrors).toContain(watchChangeError)
   const refreshed = await server.transformRequest(virtualRequestId)
