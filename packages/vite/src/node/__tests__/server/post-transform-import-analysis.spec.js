@@ -25,7 +25,7 @@ test('import analysis runs after user post transforms', async () => {
         transform: {
           order: 'post',
           handler(code, id) {
-            if (id !== normalizePath(path.join(root, 'src/main.js'))) return
+            if (!normalizePath(id).endsWith('/src/main.js')) return
             return [
               code,
               "import { dep } from './dep.js'",
@@ -46,12 +46,8 @@ test('import analysis runs after user post transforms', async () => {
 
   await server.transformRequest('/src/dep.js')
   const environment = server.environments.client
-  const main = environment.moduleGraph.getModuleById(
-    normalizePath(path.join(root, 'src/main.js')),
-  )
-  const dep = environment.moduleGraph.getModuleById(
-    normalizePath(path.join(root, 'src/dep.js')),
-  )
+  const main = await environment.moduleGraph.getModuleByUrl('/src/main.js')
+  const dep = await environment.moduleGraph.getModuleByUrl('/src/dep.js')
 
   expect(main).toBeTruthy()
   expect(dep).toBeTruthy()
