@@ -33,6 +33,7 @@ async function runScenario(rejectWatchChange) {
   return withProject(async (root) => {
     const stateFile = path.join(root, 'state.txt')
     const virtualId = '\0virtual:fieldwork-state'
+    const virtualRequestId = 'virtual:fieldwork-state'
 
     await writeProject(root, {
       'index.html': '<script type="module" src="/src/main.js"></script>',
@@ -54,7 +55,7 @@ async function runScenario(rejectWatchChange) {
     const plugin = {
       name: 'fieldwork-state-plugin',
       resolveId(id) {
-        if (id === 'virtual:fieldwork-state') return virtualId
+        if (id === virtualRequestId) return virtualId
       },
       async load(id) {
         if (id !== virtualId) return
@@ -81,8 +82,7 @@ async function runScenario(rejectWatchChange) {
     try {
       await server.transformRequest('/src/main.js')
 
-      const virtualUrl = '/@id/__x00__virtual:fieldwork-state'
-      const first = await server.transformRequest(virtualUrl)
+      const first = await server.transformRequest(virtualRequestId)
       assert.match(first?.code || '', /alpha/)
 
       const environment = server.environments.client
@@ -103,19 +103,21 @@ async function runScenario(rejectWatchChange) {
         )
       } else {
         await waitUntil(
-          () => mod.transformResult === null,
+          () => mod.transformResult == null,
           2_000,
           'module was not invalidated',
         )
       }
 
-      const invalidatedAfterEvent = mod.transformResult === null
+      const invalidatedAfterEvent = mod.transformResult == null
       if (rejectWatchChange) {
         assert.equal(mod.transformResult, previousTransform)
       }
 
-      const refreshed = await server.transformRequest(virtualUrl)
-      const refreshedValue = /beta/.test(refreshed?.code || '') ? 'beta' : 'alpha'
+      const refreshed = await server.transformRequest(virtualRequestId)
+      const refreshedValue = /beta/.test(refreshed?.code || '')
+        ? 'beta'
+        : 'alpha'
 
       return {
         rejectWatchChange,
