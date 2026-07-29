@@ -1,0 +1,92 @@
+name: Fieldwork minimal post-transform import fix
+
+permissions:
+  contents: write
+
+on:
+  push:
+    branches:
+      - fix/fieldwork-25-post-transform-import-analysis
+    paths:
+      - .github/workflows/fieldwork-post-transform-import-minimal.yml
+
+jobs:
+  rewrite-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Set Node version
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Restore main source and apply minimal wrapper
+        run: |
+          git fetch origin main --depth=1
+          git checkout origin/main -- packages/vite/src/node/plugins/importAnalysis.ts
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('packages/vite/src/node/plugins/importAnalysis.ts')
+          source = path.read_text()
+          function_marker = 'export function importAnalysisPlugin(config: ResolvedConfig): Plugin {'
+          function_start = source.index(function_marker)
+
+          opening = "  return {\n    name: 'vite:import-analysis',"
+          opening_pos = source.index(opening, function_start)
+          source = (
+              source[:opening_pos]
+              + "  const plugin = {\n    name: 'vite:import-analysis',"
+              + source[opening_pos + len(opening):]
+          )
+
+          ending = "\n    },\n  }\n}\n\nfunction mergeAcceptedUrls"
+          ending_pos = source.index(ending, opening_pos)
+          replacement = (
+              "\n    },\n"
+              "  } satisfies Plugin\n\n"
+              "  return {\n"
+              "    ...plugin,\n"
+              "    transform: {\n"
+              "      order: 'post',\n"
+              "      handler: plugin.transform,\n"
+              "    },\n"
+              "  }\n"
+              "}\n\n"
+              "function mergeAcceptedUrls"
+          )
+          source = source[:ending_pos] + replacement + source[ending_pos + len(ending):]
+          path.write_text(source)
+          PY
+
+      - name: Format changed files
+        run: pnpm exec oxfmt packages/vite/src/node/plugins/importAnalysis.ts packages/vite/src/node/__tests__/server/post-transform-import-analysis.spec.js
+
+      - name: Build Vite
+        run: pnpm run build
+
+      - name: Run focused regression
+        run: pnpm exec vitest run packages/vite/src/node/__tests__/server/post-transform-import-analysis.spec.js
+
+      - name: Lint changed files
+        run: pnpm exec eslint packages/vite/src/node/plugins/importAnalysis.ts packages/vite/src/node/__tests__/server/post-transform-import-analysis.spec.js
+
+      - name: Commit validated minimal source
+        run: |
+          rm .github/workflows/fieldwork-post-transform-import-minimal.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add packages/vite/src/node/plugins/importAnalysis.ts packages/vite/src/node/__tests__/server/post-transform-import-analysis.spec.js .github/workflows/fieldwork-post-transform-import-minimal.yml
+          git commit -m "refactor(dev): keep import-analysis hook diff minimal"
+          git push
