@@ -1,0 +1,82 @@
+name: Fieldwork post-transform import analysis fix
+
+permissions:
+  contents: write
+
+on:
+  push:
+    branches:
+      - fix/fieldwork-25-post-transform-import-analysis
+    paths:
+      - .github/workflows/fieldwork-post-transform-import-fix.yml
+
+jobs:
+  apply-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Set Node version
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Make import analysis the final post transform
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('packages/vite/src/node/plugins/importAnalysis.ts')
+          source = path.read_text()
+          plugin_marker = "    name: 'vite:import-analysis',\n"
+          plugin_start = source.index(plugin_marker)
+
+          opening = "    async transform(source, importer) {"
+          opening_pos = source.index(opening, plugin_start)
+          source = (
+              source[:opening_pos]
+              + "    transform: {\n      order: 'post',\n      async handler(source, importer) {"
+              + source[opening_pos + len(opening):]
+          )
+
+          ending = "\n    },\n  }\n}\n\nfunction mergeAcceptedUrls"
+          ending_pos = source.index(ending, opening_pos)
+          source = (
+              source[:ending_pos]
+              + "\n      },\n    },\n  }\n}\n\nfunction mergeAcceptedUrls"
+              + source[ending_pos + len(ending):]
+          )
+
+          path.write_text(source)
+          PY
+
+      - name: Format changed files
+        run: pnpm exec oxfmt packages/vite/src/node/plugins/importAnalysis.ts packages/vite/src/node/__tests__/server/post-transform-import-analysis.spec.js
+
+      - name: Build Vite
+        run: pnpm run build
+
+      - name: Run focused regression
+        run: pnpm exec vitest run packages/vite/src/node/__tests__/server/post-transform-import-analysis.spec.js
+
+      - name: Lint changed files
+        run: pnpm exec eslint packages/vite/src/node/plugins/importAnalysis.ts packages/vite/src/node/__tests__/server/post-transform-import-analysis.spec.js
+
+      - name: Commit validated source
+        run: |
+          rm .github/workflows/fieldwork-post-transform-import-fix.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add packages/vite/src/node/plugins/importAnalysis.ts packages/vite/src/node/__tests__/server/post-transform-import-analysis.spec.js .github/workflows/fieldwork-post-transform-import-fix.yml
+          git commit -m "fix(dev): run import analysis after post transforms"
+          git push
