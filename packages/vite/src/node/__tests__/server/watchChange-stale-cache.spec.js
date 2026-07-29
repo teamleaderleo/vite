@@ -26,6 +26,7 @@ async function runScenario(rejectWatchChange) {
 
   const stateFile = path.join(root, 'state.txt')
   const virtualId = '\0virtual:watch-change-state'
+  const virtualRequestId = 'virtual:watch-change-state'
 
   await writeProject(root, {
     'index.html': '<script type="module" src="/src/main.js"></script>',
@@ -53,7 +54,7 @@ async function runScenario(rejectWatchChange) {
       {
         name: 'watch-change-state',
         resolveId(id) {
-          if (id === 'virtual:watch-change-state') return virtualId
+          if (id === virtualRequestId) return virtualId
         },
         async load(id) {
           if (id !== virtualId) return
@@ -74,8 +75,7 @@ async function runScenario(rejectWatchChange) {
 
   await server.transformRequest('/src/main.js')
 
-  const virtualUrl = '/@id/__x00__virtual:watch-change-state'
-  const first = await server.transformRequest(virtualUrl)
+  const first = await server.transformRequest(virtualRequestId)
   expect(first?.code).toContain('alpha')
 
   const mod = server.environments.client.moduleGraph.getModuleById(virtualId)
@@ -94,18 +94,18 @@ async function runScenario(rejectWatchChange) {
     )
   } else {
     await waitUntil(
-      () => mod.transformResult === null,
+      () => mod.transformResult == null,
       2_000,
       'module was not invalidated',
     )
   }
 
-  const invalidatedAfterEvent = mod.transformResult === null
+  const invalidatedAfterEvent = mod.transformResult == null
   if (rejectWatchChange) {
     expect(mod.transformResult).toBe(previousTransform)
   }
 
-  const refreshed = await server.transformRequest(virtualUrl)
+  const refreshed = await server.transformRequest(virtualRequestId)
   const refreshedValue = refreshed?.code.includes('beta') ? 'beta' : 'alpha'
 
   await server.close()
