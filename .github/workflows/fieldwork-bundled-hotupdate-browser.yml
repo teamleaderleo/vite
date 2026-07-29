@@ -10,10 +10,15 @@ on:
       - playground/plugin-hot-update/**
       - research/fieldwork-25/bundled-dev-hotupdate/**
       - .github/workflows/fieldwork-bundled-hotupdate-browser.yml
+  pull_request:
+    paths:
+      - playground/plugin-hot-update/**
+      - research/fieldwork-25/bundled-dev-hotupdate/**
+      - .github/workflows/fieldwork-bundled-hotupdate-browser.yml
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_name }}
+  group: ${{ github.workflow }}-${{ github.event.number || github.sha }}
   cancel-in-progress: true
 
 jobs:
