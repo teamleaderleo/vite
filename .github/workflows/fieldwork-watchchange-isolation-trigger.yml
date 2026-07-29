@@ -1,5 +1,7 @@
 name: Trigger Fieldwork watchChange fix
 
+# Second branch commit activates this already-registered workflow.
+
 permissions:
   contents: write
 
