@@ -19,9 +19,7 @@ test.skipIf(isBuild)(
     await expect.poll(() => page.textContent('#watch')).toBe('pending')
     await expect.poll(() => page.textContent('#updates')).toBe('0')
 
-    editFile('plugin-state.txt', (content) =>
-      content.replace('alpha', 'beta'),
-    )
+    editFile('plugin-state.txt', (content) => content.replace('alpha', 'beta'))
 
     // watchChange is delivered in both modes, proving that Vite observed the
     // same filesystem event before bundled dev returns from HMR handling.
