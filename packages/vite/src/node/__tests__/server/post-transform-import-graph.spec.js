@@ -45,7 +45,7 @@ async function runScenario(order) {
     root,
     configFile: false,
     logLevel: 'silent',
-    plugins: [createImportPlugin(root, order)],
+    plugins: [createImportPlugin(order)],
     server: { middlewareMode: true, ws: false },
   })
 
@@ -61,12 +61,8 @@ async function runScenario(order) {
     await server.transformRequest('/src/dep.js')
 
     const environment = server.environments.client
-    const main = environment.moduleGraph.getModuleById(
-      normalizePath(path.join(root, 'src/main.js')),
-    )
-    const dep = environment.moduleGraph.getModuleById(
-      normalizePath(path.join(root, 'src/dep.js')),
-    )
+    const main = await environment.moduleGraph.getModuleByUrl('/src/main.js')
+    const dep = await environment.moduleGraph.getModuleByUrl('/src/dep.js')
 
     expect(main).toBeTruthy()
     expect(dep).toBeTruthy()
@@ -90,7 +86,7 @@ async function runScenario(order) {
     root,
     configFile: false,
     logLevel: 'silent',
-    plugins: [createImportPlugin(root, order)],
+    plugins: [createImportPlugin(order)],
     build: { write: false },
   })
   const outputs = Array.isArray(output) ? output : [output]
@@ -113,9 +109,9 @@ async function runScenario(order) {
   }
 }
 
-function createImportPlugin(root, order) {
+function createImportPlugin(order) {
   const handler = (code, id) => {
-    if (id !== normalizePath(path.join(root, 'src/main.js'))) return
+    if (!normalizePath(id).endsWith('/src/main.js')) return
     return [
       code,
       "import { dep } from './dep.js'",
