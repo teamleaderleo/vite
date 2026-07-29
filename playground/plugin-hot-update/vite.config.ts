@@ -13,6 +13,12 @@ export default defineConfig({
 function pluginHotUpdateState(): Plugin {
   return {
     name: 'plugin-hot-update-state',
+    configureServer(server) {
+      // Register the external state with Vite's filesystem watcher without
+      // adding it to the module or bundled dependency graph. The plugin owns
+      // the browser update through its hotUpdate custom event.
+      server.watcher.add(stateFile)
+    },
     resolveId(id) {
       if (id === publicId) return resolvedId
     },
