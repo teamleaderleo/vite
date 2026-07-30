@@ -214,6 +214,74 @@ test('does not confuse env-like string content with analyzed import.meta.env', a
   )
 })
 
+test('rejects a changed nonliteral dynamic import expression', async () => {
+  const root = await createProject({
+    'index.html': '<script type="module" src="/src/main.js"></script>',
+    'src/main.js': [
+      "const target = './dep-a.js'",
+      "const other = './dep-b.js'",
+      'globalThis.load = () => import(/* @vite-ignore */ target)',
+    ].join('\n'),
+    'src/dep-a.js': "export const dep = 'A'",
+    'src/dep-b.js': "export const dep = 'B'",
+  })
+
+  const server = await createTestServer(root, [
+    {
+      name: 'replace-dynamic-import-expression',
+      transform: {
+        order: 'post',
+        handler(code, id) {
+          if (normalizePath(id).endsWith('/src/main.js')) {
+            return code.replace(
+              'import(/* @vite-ignore */ target)',
+              'import(/* @vite-ignore */ other)',
+            )
+          }
+        },
+      },
+    },
+  ])
+
+  await expect(server.transformRequest('/src/main.js')).rejects.toThrow(
+    'introduced a dynamic import expression',
+  )
+})
+
+test('rejects a late import whose resolved file needs a different browser URL', async () => {
+  const root = await createProject({
+    'index.html': '<script type="module" src="/src/main.js"></script>',
+    'src/main.js': "console.log('main')",
+  })
+  const outsideFile = `${root}-outside.js`
+  await writeFile(outsideFile, "export const outside = 'outside'")
+  onTestFinished(() => rm(outsideFile, { force: true }))
+  let outsideSpecifier = normalizePath(
+    path.relative(path.join(root, 'src'), outsideFile),
+  )
+  if (!outsideSpecifier.startsWith('.')) {
+    outsideSpecifier = `./${outsideSpecifier}`
+  }
+
+  const server = await createTestServer(root, [
+    {
+      name: 'inject-late-outside-root-import',
+      transform: {
+        order: 'post',
+        handler(code, id) {
+          if (normalizePath(id).endsWith('/src/main.js')) {
+            return `${code}\nimport ${JSON.stringify(outsideSpecifier)}`
+          }
+        },
+      },
+    },
+  ])
+
+  await expect(server.transformRequest('/src/main.js')).rejects.toThrow(
+    'the unchanged browser import requests a different URL',
+  )
+})
+
 test('rejects a late static asset import that still requires source rewriting', async () => {
   const root = await createProject({
     'index.html': '<script type="module" src="/src/main.js"></script>',
