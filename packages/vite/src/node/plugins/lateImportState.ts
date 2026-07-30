@@ -1,6 +1,7 @@
 import type { DevEnvironment } from '../server/environment'
 
 export interface LateImportState {
+  importedIds: Set<string>
   importedUrls: Set<string>
   acceptedUrls: Set<string>
   staticImportedUrls: Set<string>
@@ -34,6 +35,7 @@ export function setLateImportState(
 ): void {
   const environmentState = getEnvironmentState(environment)
   if (
+    state.importedIds.size === 0 &&
     state.importedUrls.size === 0 &&
     state.acceptedUrls.size === 0 &&
     state.staticImportedUrls.size === 0
