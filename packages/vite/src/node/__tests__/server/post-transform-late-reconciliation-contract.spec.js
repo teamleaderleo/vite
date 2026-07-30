@@ -21,6 +21,8 @@ test('late reconciliation preserves raw imports and records final graph state', 
   })
 
   let includeLateState = true
+  let mainTransformCount = 0
+  let sawPreviousAcceptedDependencyDuringPost
   const server = await createServer({
     root,
     configFile: false,
@@ -32,6 +34,14 @@ test('late reconciliation preserves raw imports and records final graph state', 
           order: 'post',
           handler(code, id) {
             if (!normalizePath(id).endsWith('/src/main.js')) return
+            mainTransformCount++
+            if (mainTransformCount > 1) {
+              const current = this.environment.moduleGraph.getModuleById(id)
+              sawPreviousAcceptedDependencyDuringPost = [
+                ...(current?.acceptedHmrDeps ?? []),
+              ].some((dependency) => dependency.url.endsWith('/src/dep.js'))
+            }
+
             const rawImportCode = code.replace('__raw_import__', 'import')
             if (!includeLateState) return rawImportCode
             return [
@@ -81,9 +91,12 @@ test('late reconciliation preserves raw imports and records final graph state', 
 
   // Reprocessing a module that still has the same late dependency must not
   // transiently prune the edge during the normal pass and re-add it afterward.
+  // User post transforms must also keep seeing the previous accepted boundary
+  // until final reconciliation commits the replacement state.
   payloads.length = 0
   environment.moduleGraph.invalidateModule(main)
   await server.transformRequest('/src/main.js')
+  expect(sawPreviousAcceptedDependencyDuringPost).toBe(true)
   expect(payloads.filter((payload) => payload.type === 'prune')).toEqual([])
 
   // Removing the final-source dependency must replace the retained overlay and
