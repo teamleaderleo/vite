@@ -4,7 +4,10 @@ import path from 'node:path'
 import { expect, onTestFinished, test, vi } from 'vitest'
 import { createServer } from '../../server'
 import { updateModules } from '../../server/hmr'
-import { lateImportAnalysisPlugins } from '../../plugins/lateImportAnalysis'
+import {
+  lateImportAnalysisPlugin,
+  lateImportOverlayPreservePlugins,
+} from '../../plugins/lateImportAnalysis'
 
 test('late reconciliation preserves raw imports and records final graph state', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'vite-late-reconcile-'))
@@ -28,6 +31,7 @@ test('late reconciliation preserves raw imports and records final graph state', 
     configFile: false,
     logLevel: 'silent',
     plugins: [
+      ...lateImportOverlayPreservePlugins(),
       {
         name: 'inject-final-source-state',
         transform: {
@@ -53,7 +57,7 @@ test('late reconciliation preserves raw imports and records final graph state', 
           },
         },
       },
-      ...lateImportAnalysisPlugins(),
+      lateImportAnalysisPlugin(),
     ],
     server: { middlewareMode: true, ws: false },
   })
