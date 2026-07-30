@@ -44,18 +44,96 @@ interface UrlPosition {
 }
 
 /**
+ * Prototype staged overlay used before user post transforms.
+ *
+ * The normal hook carries prior late imports into ordinary import analysis.
+ * The post hook restores the previous committed late graph view after ordinary
+ * analysis and before the user post transform runs. Final reconciliation is a
+ * separate plugin placed after the user post transform.
+ */
+export function lateImportOverlayPreservePlugins(): Plugin[] {
+  const preserveImportsPlugin: Plugin = {
+    name: 'vite:late-import-overlay-preserve-imports',
+
+    applyToEnvironment(environment) {
+      return !environment.config.isBundled
+    },
+
+    transform(_source, importer) {
+      const environment = this.environment as DevEnvironment
+      const previous = getLateImportState(environment, importer)
+      if (!previous) return null
+
+      for (const id of previous.importedIds) this.addWatchFile(id)
+      return null
+    },
+  }
+
+  const restoreGraphPlugin: Plugin = {
+    name: 'vite:late-import-overlay-restore-graph',
+
+    applyToEnvironment(environment) {
+      return !environment.config.isBundled
+    },
+
+    transform: {
+      order: 'post',
+      async handler(_source, importer) {
+        const environment = this.environment as DevEnvironment
+        const previous = getLateImportState(environment, importer)
+        if (!previous) return null
+
+        const moduleGraph = environment.moduleGraph
+        const importerModule = moduleGraph.getModuleById(importer)
+        if (!importerModule) return null
+
+        const importedModules = new Set(importerModule.importedModules)
+        const acceptedModules = new Set(importerModule.acceptedHmrDeps)
+        const staticImportedUrls = new Set(
+          importerModule.staticImportedUrls ?? [],
+        )
+
+        for (const url of previous.importedUrls) {
+          const dependency = await moduleGraph.getModuleByUrl(url)
+          if (dependency) importedModules.add(dependency)
+        }
+        for (const url of previous.acceptedUrls) {
+          const dependency = await moduleGraph.getModuleByUrl(url)
+          if (dependency) acceptedModules.add(dependency)
+        }
+        for (const url of previous.staticImportedUrls) {
+          staticImportedUrls.add(url)
+        }
+
+        const prunedImports = await moduleGraph.updateModuleInfo(
+          importerModule,
+          importedModules,
+          importerModule.importedBindings,
+          acceptedModules,
+          importerModule.acceptedHmrExports,
+          importerModule.isSelfAccepting,
+          staticImportedUrls,
+        )
+        if (prunedImports) handlePrunedModules(prunedImports, environment)
+        return null
+      },
+    },
+  }
+
+  return [preserveImportsPlugin, restoreGraphPlugin]
+}
+
+/**
  * Prototype final-source reconciliation plugin.
  *
- * The normal import-analysis transform keeps ownership of URL rewriting and
- * preserves the previous late overlay in its graph commit. This final post hook
- * replaces that overlay from the current final source without rerunning ordinary
- * import rewriting.
+ * Ordinary analysis retains URL-rewrite ownership. This hook replaces the late
+ * overlay from final source without applying ordinary explicit-import rewrites.
  */
-export function lateImportAnalysisPlugins(): Plugin[] {
+export function lateImportAnalysisPlugin(): Plugin {
   let config: ResolvedConfig
   let clientPublicPath: string
 
-  const reconcilePlugin: Plugin = {
+  return {
     name: 'vite:late-import-analysis',
 
     configResolved(resolvedConfig) {
@@ -230,11 +308,17 @@ export function lateImportAnalysisPlugins(): Plugin[] {
           if (prunedImports) handlePrunedModules(prunedImports, environment)
         }
 
+        const lateImportedModules = [...finalImportedModules].filter(
+          (dependency) => !baseImportedModules.has(dependency),
+        )
         setLateImportState(environment, importer, {
+          importedIds: new Set(
+            lateImportedModules
+              .map((dependency) => dependency.id)
+              .filter((id): id is string => Boolean(id)),
+          ),
           importedUrls: new Set(
-            [...finalImportedModules]
-              .filter((dependency) => !baseImportedModules.has(dependency))
-              .map((dependency) => dependency.url),
+            lateImportedModules.map((dependency) => dependency.url),
           ),
           acceptedUrls: new Set(
             [...finalAcceptedModules]
@@ -252,8 +336,6 @@ export function lateImportAnalysisPlugins(): Plugin[] {
       },
     },
   }
-
-  return [reconcilePlugin]
 }
 
 function normalizeResolvedIdToUrl(
