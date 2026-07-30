@@ -20,6 +20,7 @@ test('late reconciliation preserves raw imports and records final graph state', 
     'src/raw.txt': 'raw dependency',
   })
 
+  let includeLateState = true
   const server = await createServer({
     root,
     configFile: false,
@@ -31,8 +32,10 @@ test('late reconciliation preserves raw imports and records final graph state', 
           order: 'post',
           handler(code, id) {
             if (!normalizePath(id).endsWith('/src/main.js')) return
+            const rawImportCode = code.replace('__raw_import__', 'import')
+            if (!includeLateState) return rawImportCode
             return [
-              code.replace('__raw_import__', 'import'),
+              rawImportCode,
               "import { dep } from './dep.js'",
               'console.log(dep)',
               "if (import.meta.hot) import.meta.hot.accept('./dep.js', () => {})",
@@ -82,6 +85,18 @@ test('late reconciliation preserves raw imports and records final graph state', 
   environment.moduleGraph.invalidateModule(main)
   await server.transformRequest('/src/main.js')
   expect(payloads.filter((payload) => payload.type === 'prune')).toEqual([])
+
+  // Removing the final-source dependency must replace the retained overlay and
+  // emit one real prune instead of keeping the dependency alive indefinitely.
+  includeLateState = false
+  payloads.length = 0
+  environment.moduleGraph.invalidateModule(main)
+  await server.transformRequest('/src/main.js')
+  const prunes = payloads.filter((payload) => payload.type === 'prune')
+  expect(prunes).toHaveLength(1)
+  expect(prunes[0].paths).toContain(dep.url)
+  expect(main.importedModules.has(dep)).toBe(false)
+  expect(main.acceptedHmrDeps.has(dep)).toBe(false)
 })
 
 async function writeProject(root, files) {
