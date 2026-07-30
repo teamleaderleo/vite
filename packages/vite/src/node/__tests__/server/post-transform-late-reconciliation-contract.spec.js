@@ -40,18 +40,11 @@ test('late reconciliation preserves raw imports and records final graph state', 
           },
         },
       },
-      lateImportAnalysisPlugin({} as never),
+      lateImportAnalysisPlugin(),
     ],
     server: { middlewareMode: true, ws: false },
   })
   onTestFinished(() => server.close())
-
-  // Replace the placeholder config passed during construction with the resolved
-  // environment config used by the internal prototype.
-  const latePlugin = server.config.plugins.find(
-    (plugin) => plugin.name === 'vite:late-import-analysis',
-  )
-  expect(latePlugin).toBeTruthy()
 
   const transformed = await server.transformRequest('/src/main.js')
 
