@@ -46,6 +46,43 @@ test('candidate post transform observes source before import analysis', async ()
   expect(postTransformInput).not.toContain('__vite__createHotContext')
 })
 
+test('candidate import analysis rewrites a dynamic import injected by a post transform', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'vite-post-raw-import-'))
+  onTestFinished(() => rm(root, { recursive: true, force: true }))
+
+  await writeProject(root, {
+    'index.html': '<script type="module" src="/src/main.js"></script>',
+    'src/main.js': "globalThis.load = () => __raw_import__('./dep.txt')",
+    'src/dep.txt': 'raw dependency',
+  })
+
+  const server = await createServer({
+    root,
+    configFile: false,
+    logLevel: 'silent',
+    plugins: [
+      {
+        name: 'inject-raw-import-last',
+        transform: {
+          order: 'post',
+          handler(code, id) {
+            if (normalizePath(id).endsWith('/src/main.js')) {
+              return code.replace('__raw_import__', 'import')
+            }
+          },
+        },
+      },
+    ],
+    server: { middlewareMode: true, ws: false },
+  })
+  onTestFinished(() => server.close())
+
+  const transformed = await server.transformRequest('/src/main.js')
+
+  expect(transformed?.code).toContain('dep.txt?import')
+  expect(transformed?.code).not.toContain("import('./dep.txt')")
+})
+
 async function writeProject(root, files) {
   for (const [relativePath, content] of Object.entries(files)) {
     const filename = path.join(root, relativePath)
