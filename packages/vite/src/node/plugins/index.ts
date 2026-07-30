@@ -39,7 +39,7 @@ import {
 } from './pluginFilter'
 import { forwardConsolePlugin } from './forwardConsole'
 import { oxcPlugin } from './oxc'
-import { esbuildBannerFooterCompatPlugin } from './esbuildBannerFooterCompatPlugin'
+import { esbuildBannerFooterCompatPlugin } from './esbuildBannerFooterPlugin'
 
 export async function resolvePlugins(
   config: ResolvedConfig,
@@ -301,3 +301,4 @@ export const viteAliasCustomResolver: ResolverFunction = async function (
 ) {
   const resolved = await this.resolve(id, importer, options)
   return resolved || { id, meta: { 'vite:alias': { noResolved: true } } }
+}
