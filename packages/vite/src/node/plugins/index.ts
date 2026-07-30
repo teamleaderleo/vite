@@ -39,7 +39,7 @@ import {
 } from './pluginFilter'
 import { forwardConsolePlugin } from './forwardConsole'
 import { oxcPlugin } from './oxc'
-import { esbuildBannerFooterCompatPlugin } from './esbuildBannerFooterPlugin'
+import { esbuildBannerFooterCompatPlugin } from './esbuildBannerFooterCompatPlugin'
 
 export async function resolvePlugins(
   config: ResolvedConfig,
