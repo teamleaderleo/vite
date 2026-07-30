@@ -1,5 +1,5 @@
-import path from 'node:path'
 import fs from 'node:fs'
+import path from 'node:path'
 import MagicString from 'magic-string'
 import type {
   ExportSpecifier,
@@ -21,7 +21,6 @@ import {
   normalizeHmrUrl,
 } from '../server/hmr'
 import type { EnvironmentModuleNode } from '../server/moduleGraph'
-import type { TransformPluginContext } from '../server/pluginContainer'
 import {
   isDataUrl,
   isDefined,
@@ -38,8 +37,15 @@ import {
   isExplicitImportRequired,
 } from './importAnalysis'
 
-interface ImportAnalysisReconcileContext extends TransformPluginContext {
+interface ImportAnalysisSnapshot {
+  importExpressions: Map<string, number>
+  hasEnv: boolean
+}
+
+interface ImportAnalysisReconcileContext {
   _viteImportAnalysisSource?: string
+  _viteImportAnalysisSnapshot?: ImportAnalysisSnapshot
+  _addedImports: Set<string> | null
 }
 
 interface UrlPosition {
@@ -60,7 +66,7 @@ interface UrlPosition {
 export function importAnalysisReconcilePlugins(
   config: ResolvedConfig,
 ): Plugin[] {
-  const { root, base } = config
+  const { base } = config
   const clientPublicPath = path.posix.join(base, CLIENT_PUBLIC_PATH)
   const enablePartialAccept = config.experimental.hmrPartialAccept
 
@@ -75,9 +81,15 @@ export function importAnalysisReconcilePlugins(
         )
       },
 
-      transform(source) {
-        ;(this as unknown as ImportAnalysisReconcileContext)._viteImportAnalysisSource =
-          source
+      async transform(source, importer) {
+        if (canSkipImportAnalysis(importer)) return null
+
+        await init
+        const context = this as unknown as ImportAnalysisReconcileContext
+        context._viteImportAnalysisSource = source
+        context._viteImportAnalysisSnapshot =
+          createImportAnalysisSnapshot(source)
+        return null
       },
     },
     {
@@ -97,8 +109,18 @@ export function importAnalysisReconcilePlugins(
 
           const context = this as unknown as ImportAnalysisReconcileContext
           const analyzedSource = context._viteImportAnalysisSource
-          if (analyzedSource == null || source === analyzedSource) return null
+          const analyzedSnapshot = context._viteImportAnalysisSnapshot
+          if (
+            analyzedSource == null ||
+            analyzedSnapshot == null ||
+            source === analyzedSource
+          ) {
+            return null
+          }
 
+          const analyzedImportExpressions = new Map(
+            analyzedSnapshot.importExpressions,
+          )
           const environment = this.environment as DevEnvironment
           const moduleGraph = environment.moduleGraph
           const importerModule = moduleGraph.getModuleById(importer)
@@ -273,7 +295,10 @@ export function importAnalysisReconcilePlugins(
               }
 
               const expression = source.slice(expressionStart, expressionEnd)
-              const wasPresentBefore = analyzedSource.includes(expression)
+              const wasPresentBefore = consumeImportExpression(
+                analyzedImportExpressions,
+                expression,
+              )
               const specifier = importSpecifier.n
               const isDynamic = dynamicIndex > -1
 
@@ -308,7 +333,7 @@ export function importAnalysisReconcilePlugins(
             }),
           )
 
-          if (hasEnv && !analyzedSource.includes('import.meta.env')) {
+          if (hasEnv && !analyzedSnapshot.hasEnv) {
             this.error(
               `A post transform introduced import.meta.env after normal import ` +
                 `analysis. Late graph reconciliation does not own environment ` +
@@ -349,7 +374,7 @@ export function importAnalysisReconcilePlugins(
           for (const { url, start, end } of acceptedUrls) {
             const acceptedModule = await ensureGraphEntry(url, start, {
               isDynamic: false,
-              wasPresentBefore: analyzedSource.includes(url),
+              wasPresentBefore: true,
               rewriteAcceptedUrl: true,
             })
             if (!acceptedModule) continue
@@ -403,6 +428,44 @@ export function importAnalysisReconcilePlugins(
       },
     },
   ]
+}
+
+function createImportAnalysisSnapshot(source: string): ImportAnalysisSnapshot {
+  const [imports] = parseImports(source)
+  const importExpressions = new Map<string, number>()
+  let hasEnv = false
+
+  for (const importSpecifier of imports) {
+    const rawUrl = source.slice(importSpecifier.s, importSpecifier.e)
+    if (rawUrl === 'import.meta') {
+      if (source.slice(importSpecifier.e, importSpecifier.e + 4) === '.env') {
+        hasEnv = true
+      }
+      continue
+    }
+
+    const expression = source.slice(importSpecifier.ss, importSpecifier.se)
+    importExpressions.set(
+      expression,
+      (importExpressions.get(expression) ?? 0) + 1,
+    )
+  }
+
+  return { importExpressions, hasEnv }
+}
+
+function consumeImportExpression(
+  importExpressions: Map<string, number>,
+  expression: string,
+): boolean {
+  const count = importExpressions.get(expression) ?? 0
+  if (count === 0) return false
+  if (count === 1) {
+    importExpressions.delete(expression)
+  } else {
+    importExpressions.set(expression, count - 1)
+  }
+  return true
 }
 
 function normalizeResolvedIdToUrl(
