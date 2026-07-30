@@ -4,6 +4,7 @@ import path from 'node:path'
 import { expect, onTestFinished, test, vi } from 'vitest'
 import { createServer } from '../../server'
 import { updateModules } from '../../server/hmr'
+import { lateImportAnalysisPlugin } from '../../plugins/lateImportAnalysis'
 
 test('late reconciliation preserves raw imports and records final graph state', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'vite-late-reconcile-'))
@@ -39,10 +40,18 @@ test('late reconciliation preserves raw imports and records final graph state', 
           },
         },
       },
+      lateImportAnalysisPlugin({} as never),
     ],
     server: { middlewareMode: true, ws: false },
   })
   onTestFinished(() => server.close())
+
+  // Replace the placeholder config passed during construction with the resolved
+  // environment config used by the internal prototype.
+  const latePlugin = server.config.plugins.find(
+    (plugin) => plugin.name === 'vite:late-import-analysis',
+  )
+  expect(latePlugin).toBeTruthy()
 
   const transformed = await server.transformRequest('/src/main.js')
 
