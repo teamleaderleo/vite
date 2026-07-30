@@ -38,7 +38,7 @@ import {
 } from './importAnalysis'
 
 interface ImportAnalysisSnapshot {
-  importExpressions: Map<string, number>
+  importKeys: Map<string, number>
   hasEnv: boolean
 }
 
@@ -113,9 +113,7 @@ export function importAnalysisReconcilePlugins(
 
           await init
           const analyzedSnapshot = createImportAnalysisSnapshot(analyzedSource)
-          const analyzedImportExpressions = new Map(
-            analyzedSnapshot.importExpressions,
-          )
+          const analyzedImportKeys = new Map(analyzedSnapshot.importKeys)
           let imports!: readonly ImportSpecifier[]
           let exports!: readonly ExportSpecifier[]
           try {
@@ -239,8 +237,6 @@ export function importAnalysisReconcilePlugins(
               const {
                 s: start,
                 e: end,
-                ss: expressionStart,
-                se: expressionEnd,
                 d: dynamicIndex,
               } = importSpecifier
               const rawUrl = source.slice(start, end)
@@ -283,10 +279,9 @@ export function importAnalysisReconcilePlugins(
                 return
               }
 
-              const expression = source.slice(expressionStart, expressionEnd)
-              const wasPresentBefore = consumeImportExpression(
-                analyzedImportExpressions,
-                expression,
+              const wasPresentBefore = consumeImportKey(
+                analyzedImportKeys,
+                getImportKey(importSpecifier),
               )
               const specifier = importSpecifier.n
               const isDynamic = dynamicIndex > -1
@@ -421,7 +416,7 @@ export function importAnalysisReconcilePlugins(
 
 function createImportAnalysisSnapshot(source: string): ImportAnalysisSnapshot {
   const [imports] = parseImports(source)
-  const importExpressions = new Map<string, number>()
+  const importKeys = new Map<string, number>()
   let hasEnv = false
 
   for (const importSpecifier of imports) {
@@ -433,26 +428,28 @@ function createImportAnalysisSnapshot(source: string): ImportAnalysisSnapshot {
       continue
     }
 
-    const expression = source.slice(importSpecifier.ss, importSpecifier.se)
-    importExpressions.set(
-      expression,
-      (importExpressions.get(expression) ?? 0) + 1,
-    )
+    const key = getImportKey(importSpecifier)
+    importKeys.set(key, (importKeys.get(key) ?? 0) + 1)
   }
 
-  return { importExpressions, hasEnv }
+  return { importKeys, hasEnv }
 }
 
-function consumeImportExpression(
-  importExpressions: Map<string, number>,
-  expression: string,
+function getImportKey(importSpecifier: ImportSpecifier): string {
+  if (importSpecifier.n === undefined) return 'dynamic-expression'
+  return `${importSpecifier.d > -1 ? 'dynamic' : 'static'}:${importSpecifier.n}`
+}
+
+function consumeImportKey(
+  importKeys: Map<string, number>,
+  key: string,
 ): boolean {
-  const count = importExpressions.get(expression) ?? 0
+  const count = importKeys.get(key) ?? 0
   if (count === 0) return false
   if (count === 1) {
-    importExpressions.delete(expression)
+    importKeys.delete(key)
   } else {
-    importExpressions.set(expression, count - 1)
+    importKeys.set(key, count - 1)
   }
   return true
 }
