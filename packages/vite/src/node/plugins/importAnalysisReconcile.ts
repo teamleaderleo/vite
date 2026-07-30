@@ -225,6 +225,28 @@ export function importAnalysisReconcilePlugins(
 
             url = joinUrlSegments(base, url)
             const graphUrl = unwrapId(stripBase(url, base))
+            if (
+              !options.rewriteAcceptedUrl &&
+              !options.wasPresentBefore &&
+              !matchesBrowserImportUrl(
+                specifier,
+                importerModule.url,
+                graphUrl,
+                base,
+              )
+            ) {
+              this.error(
+                `A post transform introduced the import ${JSON.stringify(
+                  specifier,
+                )} after Vite import analysis. It resolves to ${JSON.stringify(
+                  graphUrl,
+                )}, but the unchanged browser import requests a different URL. ` +
+                  `Move the import to an earlier transform or emit the final ` +
+                  `browser URL explicitly.`,
+                position,
+              )
+            }
+
             return moduleGraph._ensureEntryFromUrl(
               graphUrl,
               canSkipImportAnalysis(graphUrl),
@@ -452,6 +474,33 @@ function consumeImportKey(
     importKeys.set(key, count - 1)
   }
   return true
+}
+
+function matchesBrowserImportUrl(
+  specifier: string,
+  importerUrl: string,
+  graphUrl: string,
+  base: string,
+): boolean {
+  if (
+    base !== '/' &&
+    specifier.startsWith('/') &&
+    !specifier.startsWith(base)
+  ) {
+    return false
+  }
+
+  const withoutHash = specifier.split('#', 1)[0]
+  const cleanSpecifier = cleanUrl(withoutHash)
+  const query = withoutHash.slice(cleanSpecifier.length)
+  const browserUrl = cleanSpecifier.startsWith('/')
+    ? cleanSpecifier
+    : path.posix.resolve(path.posix.dirname(cleanUrl(importerUrl)), cleanSpecifier)
+  const browserGraphUrl = unwrapId(stripBase(`${browserUrl}${query}`, base))
+
+  return (
+    removeTimestampQuery(browserGraphUrl) === removeTimestampQuery(graphUrl)
+  )
 }
 
 function normalizeResolvedIdToUrl(
