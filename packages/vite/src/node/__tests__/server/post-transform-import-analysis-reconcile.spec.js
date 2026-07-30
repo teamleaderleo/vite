@@ -34,7 +34,9 @@ test('preserves the current post-transform input stage', async () => {
   await server.transformRequest('/src/main.js')
 
   expect(postTransformInput).toContain('__vite__createHotContext')
-  expect(postTransformInput).not.toContain('if (import.meta.hot)')
+  expect(postTransformInput).toContain(
+    'import.meta.hot.accept("/src/dep.js"',
+  )
 })
 
 test('reconciles a late relative import and HMR boundary without rewriting the import', async () => {
@@ -156,10 +158,13 @@ test('replaces a previous late graph edge when the post transform changes', asyn
   expect(main.importedModules.has(depB)).toBe(true)
 })
 
-test('rejects a late bare import that still requires URL rewriting', async () => {
+test('does not confuse import-like string content with an analyzed import', async () => {
   const root = await createProject({
     'index.html': '<script type="module" src="/src/main.js"></script>',
-    'src/main.js': "console.log('main')",
+    'src/main.js': [
+      `const marker = "import 'picocolors'"`,
+      'console.log(marker)',
+    ].join('\n'),
   })
 
   const server = await createTestServer(root, [
@@ -178,6 +183,34 @@ test('rejects a late bare import that still requires URL rewriting', async () =>
 
   await expect(server.transformRequest('/src/main.js')).rejects.toThrow(
     'still requires Vite URL rewriting',
+  )
+})
+
+test('does not confuse env-like string content with analyzed import.meta.env', async () => {
+  const root = await createProject({
+    'index.html': '<script type="module" src="/src/main.js"></script>',
+    'src/main.js': [
+      'const marker = "import.meta.env"',
+      'console.log(marker)',
+    ].join('\n'),
+  })
+
+  const server = await createTestServer(root, [
+    {
+      name: 'inject-late-import-meta-env',
+      transform: {
+        order: 'post',
+        handler(code, id) {
+          if (normalizePath(id).endsWith('/src/main.js')) {
+            return `${code}\nconsole.log(import.meta.env.MODE)`
+          }
+        },
+      },
+    },
+  ])
+
+  await expect(server.transformRequest('/src/main.js')).rejects.toThrow(
+    'introduced import.meta.env after normal import analysis',
   )
 })
 
