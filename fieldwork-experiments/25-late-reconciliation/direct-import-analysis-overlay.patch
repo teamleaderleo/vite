@@ -1,0 +1,52 @@
+diff --git a/packages/vite/src/node/plugins/importAnalysis.ts b/packages/vite/src/node/plugins/importAnalysis.ts
+index ea27e678a..FIELDWORK 100644
+--- a/packages/vite/src/node/plugins/importAnalysis.ts
++++ b/packages/vite/src/node/plugins/importAnalysis.ts
+@@
+ import { getAliasPatternMatcher } from './preAlias'
++import { getLateImportState } from './lateImportState'
+@@
+         if (pluginImports) {
+@@
+           ).forEach(([url]) => importedUrls.add(stripBase(url, base)))
+         }
++
++        // Preserve the last committed final-source overlay through the ordinary
++        // analysis commit. A later final-source reconciler atomically replaces
++        // this overlay after user post transforms finish.
++        const previousLateState = getLateImportState(environment, importer)
++        if (previousLateState) {
++          for (const url of previousLateState.importedUrls) {
++            importedUrls.add(url)
++          }
++          for (const url of previousLateState.acceptedUrls) {
++            normalizedAcceptedUrls.add(url)
++          }
++          for (const url of previousLateState.staticImportedUrls) {
++            staticImportedUrls.add(url)
++          }
++        }
+@@
+         const prunedImports = await moduleGraph.updateModuleInfo(
+
+Fieldwork status: exact patch artifact, not applied.
+
+Purpose:
+
+- keep one ordinary graph commit before user post hooks;
+- preserve previous late imported and accepted URLs during that commit;
+- let user post hooks observe the prior committed final-source graph;
+- let the final reconciler replace the overlay and emit only real removals.
+
+Why retained separately:
+
+The connected GitHub writer supports whole-file replacement, while this source file is large. The local runtime cannot resolve GitHub for a safe checkout. This exact patch records the narrow intended integration without reconstructing unrelated source from fragments.
+
+Required review before application:
+
+- accepted-export and self-accept overlay semantics;
+- imported binding ownership for late additions;
+- base stripping and URL normalization identity;
+- parse/resolve rollback;
+- stale transform generation fencing;
+- state cleanup on module/environment teardown.
