@@ -46,6 +46,43 @@ test('baseline post transform observes import-analysis output', async () => {
   expect(postTransformInput).not.toContain('if (import.meta.hot)')
 })
 
+test('baseline post transform can inject a raw dynamic import after analysis', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'vite-post-raw-import-'))
+  onTestFinished(() => rm(root, { recursive: true, force: true }))
+
+  await writeProject(root, {
+    'index.html': '<script type="module" src="/src/main.js"></script>',
+    'src/main.js': "globalThis.load = () => __raw_import__('./dep.txt')",
+    'src/dep.txt': 'raw dependency',
+  })
+
+  const server = await createServer({
+    root,
+    configFile: false,
+    logLevel: 'silent',
+    plugins: [
+      {
+        name: 'inject-raw-import-last',
+        transform: {
+          order: 'post',
+          handler(code, id) {
+            if (normalizePath(id).endsWith('/src/main.js')) {
+              return code.replace('__raw_import__', 'import')
+            }
+          },
+        },
+      },
+    ],
+    server: { middlewareMode: true, ws: false },
+  })
+  onTestFinished(() => server.close())
+
+  const transformed = await server.transformRequest('/src/main.js')
+
+  expect(transformed?.code).toContain("import('./dep.txt')")
+  expect(transformed?.code).not.toContain('dep.txt?import')
+})
+
 async function writeProject(root, files) {
   for (const [relativePath, content] of Object.entries(files)) {
     const filename = path.join(root, relativePath)
