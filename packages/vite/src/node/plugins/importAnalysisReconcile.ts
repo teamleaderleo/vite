@@ -44,7 +44,6 @@ interface ImportAnalysisSnapshot {
 
 interface ImportAnalysisReconcileContext {
   _viteImportAnalysisSource?: string
-  _viteImportAnalysisSnapshot?: ImportAnalysisSnapshot
   _addedImports: Set<string> | null
 }
 
@@ -81,14 +80,10 @@ export function importAnalysisReconcilePlugins(
         )
       },
 
-      async transform(source, importer) {
+      transform(source, importer) {
         if (canSkipImportAnalysis(importer)) return null
-
-        await init
-        const context = this as unknown as ImportAnalysisReconcileContext
-        context._viteImportAnalysisSource = source
-        context._viteImportAnalysisSnapshot =
-          createImportAnalysisSnapshot(source)
+        ;(this as unknown as ImportAnalysisReconcileContext)._viteImportAnalysisSource =
+          source
         return null
       },
     },
@@ -109,24 +104,18 @@ export function importAnalysisReconcilePlugins(
 
           const context = this as unknown as ImportAnalysisReconcileContext
           const analyzedSource = context._viteImportAnalysisSource
-          const analyzedSnapshot = context._viteImportAnalysisSnapshot
-          if (
-            analyzedSource == null ||
-            analyzedSnapshot == null ||
-            source === analyzedSource
-          ) {
-            return null
-          }
+          if (analyzedSource == null || source === analyzedSource) return null
 
-          const analyzedImportExpressions = new Map(
-            analyzedSnapshot.importExpressions,
-          )
           const environment = this.environment as DevEnvironment
           const moduleGraph = environment.moduleGraph
           const importerModule = moduleGraph.getModuleById(importer)
           if (!importerModule) return null
 
           await init
+          const analyzedSnapshot = createImportAnalysisSnapshot(analyzedSource)
+          const analyzedImportExpressions = new Map(
+            analyzedSnapshot.importExpressions,
+          )
           let imports!: readonly ImportSpecifier[]
           let exports!: readonly ExportSpecifier[]
           try {
