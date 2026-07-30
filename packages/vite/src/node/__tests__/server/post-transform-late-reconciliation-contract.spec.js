@@ -75,6 +75,13 @@ test('late reconciliation preserves raw imports and records final graph state', 
   updateModules(environment, 'src/dep.js', [dep], Date.now())
   expect(payloads).toHaveLength(1)
   expect(payloads[0].type).toBe('update')
+
+  // Reprocessing a module that still has the same late dependency must not
+  // transiently prune the edge during the normal pass and re-add it afterward.
+  payloads.length = 0
+  environment.moduleGraph.invalidateModule(main)
+  await server.transformRequest('/src/main.js')
+  expect(payloads.filter((payload) => payload.type === 'prune')).toEqual([])
 })
 
 async function writeProject(root, files) {
