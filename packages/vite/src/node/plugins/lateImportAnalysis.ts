@@ -35,6 +35,7 @@ import {
   createParseErrorInfo,
   isExplicitImportRequired,
 } from './importAnalysis'
+import { getLateImportState, setLateImportState } from './lateImportState'
 
 interface UrlPosition {
   url: string
@@ -42,55 +43,17 @@ interface UrlPosition {
   end: number
 }
 
-interface LateImportState {
-  importedModules: Set<EnvironmentModuleNode>
-  acceptedModules: Set<EnvironmentModuleNode>
-  staticImportedUrls: Set<string>
-}
-
 /**
- * Prototype final-source reconciliation plugins.
+ * Prototype final-source reconciliation plugin.
  *
- * The preserve plugin carries the previous final-source import overlay through
- * the ordinary import-analysis pass so an unchanged late dependency is not
- * transiently pruned. The final plugin then replaces that overlay from the
- * current final source without rerunning ordinary URL rewriting.
+ * The normal import-analysis transform keeps ownership of URL rewriting and
+ * preserves the previous late overlay in its graph commit. This final post hook
+ * replaces that overlay from the current final source without rerunning ordinary
+ * import rewriting.
  */
 export function lateImportAnalysisPlugins(): Plugin[] {
   let config: ResolvedConfig
   let clientPublicPath: string
-  const stateByEnvironment = new WeakMap<
-    DevEnvironment,
-    Map<string, LateImportState>
-  >()
-
-  const getEnvironmentState = (environment: DevEnvironment) => {
-    let state = stateByEnvironment.get(environment)
-    if (!state) {
-      state = new Map()
-      stateByEnvironment.set(environment, state)
-    }
-    return state
-  }
-
-  const preservePlugin: Plugin = {
-    name: 'vite:late-import-analysis-preserve',
-
-    applyToEnvironment(environment) {
-      return !environment.config.isBundled
-    },
-
-    transform(_source, importer) {
-      const environment = this.environment as DevEnvironment
-      const previous = getEnvironmentState(environment).get(importer)
-      if (!previous) return null
-
-      for (const dependency of previous.importedModules) {
-        if (dependency.file) this.addWatchFile(dependency.file)
-      }
-      return null
-    },
-  }
 
   const reconcilePlugin: Plugin = {
     name: 'vite:late-import-analysis',
@@ -127,20 +90,22 @@ export function lateImportAnalysisPlugins(): Plugin[] {
         const importerModule = moduleGraph.getModuleById(importer)
         if (!importerModule) return null
 
-        const environmentState = getEnvironmentState(environment)
-        const previous = environmentState.get(importer)
-
+        const previous = getLateImportState(environment, importer)
         const baseImportedModules = new Set(importerModule.importedModules)
         const baseAcceptedModules = new Set(importerModule.acceptedHmrDeps)
         const baseStaticImportedUrls = new Set(
           importerModule.staticImportedUrls ?? [],
         )
         if (previous) {
-          for (const dependency of previous.importedModules) {
-            baseImportedModules.delete(dependency)
+          for (const dependency of baseImportedModules) {
+            if (previous.importedUrls.has(dependency.url)) {
+              baseImportedModules.delete(dependency)
+            }
           }
-          for (const dependency of previous.acceptedModules) {
-            baseAcceptedModules.delete(dependency)
+          for (const dependency of baseAcceptedModules) {
+            if (previous.acceptedUrls.has(dependency.url)) {
+              baseAcceptedModules.delete(dependency)
+            }
           }
           for (const url of previous.staticImportedUrls) {
             baseStaticImportedUrls.delete(url)
@@ -173,11 +138,7 @@ export function lateImportAnalysisPlugins(): Plugin[] {
         }
 
         for (const importSpecifier of imports) {
-          const {
-            s: start,
-            e: end,
-            d: dynamicIndex,
-          } = importSpecifier
+          const { s: start, e: end, d: dynamicIndex } = importSpecifier
           const rawUrl = source.slice(start, end)
 
           if (rawUrl === 'import.meta') {
@@ -269,16 +230,16 @@ export function lateImportAnalysisPlugins(): Plugin[] {
           if (prunedImports) handlePrunedModules(prunedImports, environment)
         }
 
-        environmentState.set(importer, {
-          importedModules: new Set(
-            [...finalImportedModules].filter(
-              (dependency) => !baseImportedModules.has(dependency),
-            ),
+        setLateImportState(environment, importer, {
+          importedUrls: new Set(
+            [...finalImportedModules]
+              .filter((dependency) => !baseImportedModules.has(dependency))
+              .map((dependency) => dependency.url),
           ),
-          acceptedModules: new Set(
-            [...finalAcceptedModules].filter(
-              (dependency) => !baseAcceptedModules.has(dependency),
-            ),
+          acceptedUrls: new Set(
+            [...finalAcceptedModules]
+              .filter((dependency) => !baseAcceptedModules.has(dependency))
+              .map((dependency) => dependency.url),
           ),
           staticImportedUrls: new Set(
             [...finalStaticImportedUrls].filter(
@@ -292,7 +253,7 @@ export function lateImportAnalysisPlugins(): Plugin[] {
     },
   }
 
-  return [preservePlugin, reconcilePlugin]
+  return [reconcilePlugin]
 }
 
 function normalizeResolvedIdToUrl(
