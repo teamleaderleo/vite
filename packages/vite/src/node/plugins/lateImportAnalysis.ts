@@ -49,11 +49,17 @@ interface UrlPosition {
  * reconciles graph/HMR state added after that pass. In particular, it does not
  * rewrite dynamic imports deliberately introduced by a post transform.
  */
-export function lateImportAnalysisPlugin(config: ResolvedConfig): Plugin {
-  const clientPublicPath = path.posix.join(config.base, CLIENT_PUBLIC_PATH)
+export function lateImportAnalysisPlugin(): Plugin {
+  let config: ResolvedConfig
+  let clientPublicPath: string
 
   return {
     name: 'vite:late-import-analysis',
+
+    configResolved(resolvedConfig) {
+      config = resolvedConfig
+      clientPublicPath = path.posix.join(config.base, CLIENT_PUBLIC_PATH)
+    },
 
     applyToEnvironment(environment) {
       return !environment.config.isBundled
