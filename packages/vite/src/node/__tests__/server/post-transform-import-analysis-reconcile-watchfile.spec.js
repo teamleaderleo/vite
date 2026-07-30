@@ -49,6 +49,41 @@ test('reconciles a watch file added by a source-preserving post transform', asyn
   ).toBe(true)
 })
 
+test('does not confuse source text with a previously analyzed import', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'vite-post-collision-'))
+  onTestFinished(() => rm(root, { recursive: true, force: true }))
+
+  await writeProject(root, {
+    'index.html': '<script type="module" src="/src/main.js"></script>',
+    'src/main.js': `console.log("import 'picocolors'")`,
+  })
+
+  const server = await createServer({
+    root,
+    configFile: false,
+    logLevel: 'silent',
+    plugins: [
+      {
+        name: 'late-bare-import-with-text-collision',
+        transform: {
+          order: 'post',
+          handler(code, id) {
+            if (normalizePath(id).endsWith('/src/main.js')) {
+              return `${code}\nimport 'picocolors'`
+            }
+          },
+        },
+      },
+    ],
+    server: { middlewareMode: true, ws: false },
+  })
+  onTestFinished(() => server.close())
+
+  await expect(server.transformRequest('/src/main.js')).rejects.toThrow(
+    'still requires Vite URL rewriting',
+  )
+})
+
 async function writeProject(root, files) {
   for (const [relativePath, content] of Object.entries(files)) {
     const filename = path.join(root, relativePath)
