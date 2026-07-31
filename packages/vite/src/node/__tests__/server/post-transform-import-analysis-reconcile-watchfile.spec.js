@@ -119,7 +119,7 @@ test('does not confuse source text with analyzed import.meta.env usage', async (
   )
 })
 
-test('keeps a late dynamic import out of static import state', async () => {
+test('keeps an analyzable late dynamic import in timestamp invalidation state', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'vite-post-dynamic-'))
   onTestFinished(() => rm(root, { recursive: true, force: true }))
 
@@ -160,7 +160,7 @@ test('keeps a late dynamic import out of static import state', async () => {
   expect(main).toBeTruthy()
   expect(dep).toBeTruthy()
   expect(main.importedModules.has(dep)).toBe(true)
-  expect(main.staticImportedUrls?.has(dep.url)).toBe(false)
+  expect(main.staticImportedUrls?.has(dep.url)).toBe(true)
 })
 
 async function writeProject(root, files) {
