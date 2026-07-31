@@ -42,33 +42,3 @@ diff --git a/packages/vite/src/node/plugins/importAnalysisReconcile.ts b/package
  
            const environment = this.environment as DevEnvironment
            const moduleGraph = environment.moduleGraph
-@@ -132,6 +147,7 @@ export function importAnalysisReconcilePlugins(
-           const orderedImportedModules = new Array<
-             EnvironmentModuleNode | undefined
-           >(imports.length)
-+          const staticImportedUrls = new Set<string>()
-           const orderedAcceptedUrls = new Array<
-             Set<UrlPosition> | undefined
-           >(imports.length)
-@@ -289,6 +305,9 @@ export function importAnalysisReconcilePlugins(
-               if (!importedModule) return
- 
-               orderedImportedModules[index] = importedModule
-+              if (!isDynamic) {
-+                staticImportedUrls.add(removeTimestampQuery(importedModule.url))
-+              }
-               if (enablePartialAccept && importedBindings) {
-                 extractImportedBindings(
-                   importedModule.id || importedModule.url,
-@@ -313,11 +332,6 @@ export function importAnalysisReconcilePlugins(
-           const importedModules = new Set(
-             orderedImportedModules.filter(isDefined),
-           )
--          const staticImportedUrls = new Set(
--            [...importedModules].map((module) =>
--              removeTimestampQuery(module.url),
--            ),
--          )
- 
-           const addedImports = context._addedImports
-           if (addedImports) {
