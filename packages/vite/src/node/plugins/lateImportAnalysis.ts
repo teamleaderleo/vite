@@ -229,9 +229,7 @@ export function lateImportAnalysisPlugin(): Plugin {
 
             const acceptStart = source.indexOf('(', endHot + 7)
             if (acceptStart < 0) continue
-            if (
-              lexAcceptedHmrDeps(source, acceptStart + 1, acceptedUrls)
-            ) {
+            if (lexAcceptedHmrDeps(source, acceptStart + 1, acceptedUrls)) {
               isSelfAccepting = true
             }
             continue
@@ -244,8 +242,6 @@ export function lateImportAnalysisPlugin(): Plugin {
 
           const isDynamicImport = dynamicIndex > -1
           if (isDynamicImport && isExplicitImportRequired(specifier)) {
-            // Preserve current first-party behavior where a post transform
-            // intentionally introduces a raw dynamic import after rewriting.
             continue
           }
 
