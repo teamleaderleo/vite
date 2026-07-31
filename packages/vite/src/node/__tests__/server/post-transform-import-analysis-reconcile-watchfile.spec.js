@@ -84,6 +84,85 @@ test('does not confuse source text with a previously analyzed import', async () 
   )
 })
 
+test('does not confuse source text with analyzed import.meta.env usage', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'vite-post-env-collision-'))
+  onTestFinished(() => rm(root, { recursive: true, force: true }))
+
+  await writeProject(root, {
+    'index.html': '<script type="module" src="/src/main.js"></script>',
+    'src/main.js': `console.log('import.meta.env')`,
+  })
+
+  const server = await createServer({
+    root,
+    configFile: false,
+    logLevel: 'silent',
+    plugins: [
+      {
+        name: 'late-env-with-text-collision',
+        transform: {
+          order: 'post',
+          handler(code, id) {
+            if (normalizePath(id).endsWith('/src/main.js')) {
+              return `${code}\nglobalThis.mode = import.meta.env.MODE`
+            }
+          },
+        },
+      },
+    ],
+    server: { middlewareMode: true, ws: false },
+  })
+  onTestFinished(() => server.close())
+
+  await expect(server.transformRequest('/src/main.js')).rejects.toThrow(
+    'introduced import.meta.env after normal import analysis',
+  )
+})
+
+test('keeps a late dynamic import out of static import state', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'vite-post-dynamic-'))
+  onTestFinished(() => rm(root, { recursive: true, force: true }))
+
+  await writeProject(root, {
+    'index.html': '<script type="module" src="/src/main.js"></script>',
+    'src/main.js': "globalThis.load = () => __raw_import__('./dep.js')",
+    'src/dep.js': "export const value = 'dynamic'",
+  })
+
+  const server = await createServer({
+    root,
+    configFile: false,
+    logLevel: 'silent',
+    plugins: [
+      {
+        name: 'late-dynamic-import',
+        transform: {
+          order: 'post',
+          handler(code, id) {
+            if (normalizePath(id).endsWith('/src/main.js')) {
+              return code.replace('__raw_import__', 'import')
+            }
+          },
+        },
+      },
+    ],
+    server: { middlewareMode: true, ws: false },
+  })
+  onTestFinished(() => server.close())
+
+  await server.transformRequest('/src/main.js')
+  await server.transformRequest('/src/dep.js')
+
+  const environment = server.environments.client
+  const main = await environment.moduleGraph.getModuleByUrl('/src/main.js')
+  const dep = await environment.moduleGraph.getModuleByUrl('/src/dep.js')
+
+  expect(main).toBeTruthy()
+  expect(dep).toBeTruthy()
+  expect(main.importedModules.has(dep)).toBe(true)
+  expect(main.staticImportedUrls?.has(dep.url)).toBe(false)
+})
+
 async function writeProject(root, files) {
   for (const [relativePath, content] of Object.entries(files)) {
     const filename = path.join(root, relativePath)
