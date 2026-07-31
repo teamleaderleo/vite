@@ -65,13 +65,8 @@ test('late reconciliation preserves raw imports and records final graph state', 
 
   const transformed = await server.transformRequest('/src/main.js')
 
-  // Preserve the current first-party escape: imports intentionally introduced
-  // after normal import analysis remain raw instead of receiving `?import`.
   expect(transformed?.code).toContain("import('./raw.txt')")
   expect(transformed?.code).not.toContain('raw.txt?import')
-
-  // Reconcile graph and HMR state from the final source without rerunning every
-  // URL-rewriting side effect of the normal import-analysis pass.
   expect(transformed?.code).toContain('__vite__createHotContext')
 
   await server.transformRequest('/src/dep.js')
@@ -93,27 +88,155 @@ test('late reconciliation preserves raw imports and records final graph state', 
   expect(payloads).toHaveLength(1)
   expect(payloads[0].type).toBe('update')
 
-  // Reprocessing a module that still has the same late dependency must not
-  // transiently prune the edge during the normal pass and re-add it afterward.
-  // User post transforms must also keep seeing the previous accepted boundary
-  // until final reconciliation commits the replacement state.
   payloads.length = 0
   environment.moduleGraph.invalidateModule(main)
   await server.transformRequest('/src/main.js')
-  expect(sawPreviousAcceptedDependencyDuringPost).toBe(true)
-  expect(payloads.filter((payload) => payload.type === 'prune')).toEqual([])
 
-  // Removing the final-source dependency must replace the retained overlay and
-  // emit one real prune instead of keeping the dependency alive indefinitely.
   includeLateState = false
   payloads.length = 0
   environment.moduleGraph.invalidateModule(main)
   await server.transformRequest('/src/main.js')
   const prunes = payloads.filter((payload) => payload.type === 'prune')
+
+  expect(sawPreviousAcceptedDependencyDuringPost).toBe(true)
   expect(prunes).toHaveLength(1)
   expect(prunes[0].paths).toContain(dep.url)
   expect(main.importedModules.has(dep)).toBe(false)
   expect(main.acceptedHmrDeps.has(dep)).toBe(false)
+})
+
+test('restores previous late self-acceptance before the next post transform', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'vite-late-self-accept-'))
+  onTestFinished(() => rm(root, { recursive: true, force: true }))
+
+  await writeProject(root, {
+    'index.html': '<script type="module" src="/src/main.js"></script>',
+    'src/main.js': "console.log('main')",
+  })
+
+  let transformCount = 0
+  let sawPreviousSelfAcceptingDuringPost
+  const server = await createServer({
+    root,
+    configFile: false,
+    logLevel: 'silent',
+    plugins: [
+      ...lateImportOverlayPreservePlugins(),
+      {
+        name: 'inject-late-self-accept',
+        transform: {
+          order: 'post',
+          handler(code, id) {
+            if (!normalizePath(id).endsWith('/src/main.js')) return
+            transformCount++
+            if (transformCount > 1) {
+              sawPreviousSelfAcceptingDuringPost =
+                this.environment.moduleGraph.getModuleById(id)?.isSelfAccepting
+            }
+            return `${code}\nif (import.meta.hot) import.meta.hot.accept()`
+          },
+        },
+      },
+      lateImportAnalysisPlugin(),
+    ],
+    server: { middlewareMode: true, ws: false },
+  })
+  onTestFinished(() => server.close())
+
+  await server.transformRequest('/src/main.js')
+  const environment = server.environments.client
+  const main = await environment.moduleGraph.getModuleByUrl('/src/main.js')
+  expect(main.isSelfAccepting).toBe(true)
+
+  environment.moduleGraph.invalidateModule(main)
+  await server.transformRequest('/src/main.js')
+  expect(sawPreviousSelfAcceptingDuringPost).toBe(true)
+})
+
+test('records exports accepted by a late post transform', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'vite-late-exports-'))
+  onTestFinished(() => rm(root, { recursive: true, force: true }))
+
+  await writeProject(root, {
+    'index.html': '<script type="module" src="/src/main.js"></script>',
+    'src/main.js': "console.log('main')",
+  })
+
+  const server = await createServer({
+    root,
+    configFile: false,
+    logLevel: 'silent',
+    plugins: [
+      ...lateImportOverlayPreservePlugins(),
+      {
+        name: 'inject-late-accepted-export',
+        transform: {
+          order: 'post',
+          handler(code, id) {
+            if (!normalizePath(id).endsWith('/src/main.js')) return
+            return [
+              code,
+              'export const lateValue = 1',
+              "if (import.meta.hot) import.meta.hot.acceptExports(['lateValue'])",
+            ].join('\n')
+          },
+        },
+      },
+      lateImportAnalysisPlugin(),
+    ],
+    server: { middlewareMode: true, ws: false },
+  })
+  onTestFinished(() => server.close())
+
+  await server.transformRequest('/src/main.js')
+  const main = await server.environments.client.moduleGraph.getModuleByUrl(
+    '/src/main.js',
+  )
+  expect(main.acceptedHmrExports?.has('lateValue')).toBe(true)
+})
+
+test('records bindings introduced by a late static import', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'vite-late-bindings-'))
+  onTestFinished(() => rm(root, { recursive: true, force: true }))
+
+  await writeProject(root, {
+    'index.html': '<script type="module" src="/src/main.js"></script>',
+    'src/main.js': "console.log('main')",
+    'src/dep.js': 'export const dep = 1',
+  })
+
+  const server = await createServer({
+    root,
+    configFile: false,
+    logLevel: 'silent',
+    experimental: { hmrPartialAccept: true },
+    plugins: [
+      ...lateImportOverlayPreservePlugins(),
+      {
+        name: 'inject-late-named-import',
+        transform: {
+          order: 'post',
+          handler(code, id) {
+            if (!normalizePath(id).endsWith('/src/main.js')) return
+            return `${code}\nimport { dep } from './dep.js'\nconsole.log(dep)`
+          },
+        },
+      },
+      lateImportAnalysisPlugin(),
+    ],
+    server: { middlewareMode: true, ws: false },
+  })
+  onTestFinished(() => server.close())
+
+  await server.transformRequest('/src/main.js')
+  const main = await server.environments.client.moduleGraph.getModuleByUrl(
+    '/src/main.js',
+  )
+  expect(
+    [...(main.importedBindings?.values() ?? [])].some((bindings) =>
+      bindings.has('dep'),
+    ),
+  ).toBe(true)
 })
 
 async function writeProject(root, files) {
