@@ -1,0 +1,44 @@
+diff --git a/packages/vite/src/node/plugins/importAnalysisReconcile.ts b/packages/vite/src/node/plugins/importAnalysisReconcile.ts
+--- a/packages/vite/src/node/plugins/importAnalysisReconcile.ts
++++ b/packages/vite/src/node/plugins/importAnalysisReconcile.ts
+@@ -29,6 +29,7 @@ interface ImportAnalysisSnapshot {
+ 
+ interface ImportAnalysisReconcileContext {
+   _viteImportAnalysisSource?: string
++  _viteImportAnalysisAddedImports?: Set<string>
+   _addedImports: Set<string> | null
+ }
+@@ -76,8 +77,11 @@ export function importAnalysisReconcilePlugins(
+ 
+       transform(source, importer) {
+         if (canSkipImportAnalysis(importer)) return null
+-        ;(this as unknown as ImportAnalysisReconcileContext)._viteImportAnalysisSource =
+-          source
++        const context = this as unknown as ImportAnalysisReconcileContext
++        context._viteImportAnalysisSource = source
++        context._viteImportAnalysisAddedImports = new Set(
++          context._addedImports ?? [],
++        )
+         return null
+       },
+     },
+@@ -96,7 +100,18 @@ export function importAnalysisReconcilePlugins(
+ 
+           const context = this as unknown as ImportAnalysisReconcileContext
+           const analyzedSource = context._viteImportAnalysisSource
+-          if (analyzedSource == null || source === analyzedSource) return null
++          const analyzedAddedImports =
++            context._viteImportAnalysisAddedImports ?? new Set<string>()
++          const lateAddedImports = new Set(
++            [...(context._addedImports ?? [])].filter(
++              (id) => !analyzedAddedImports.has(id),
++            ),
++          )
++
++          if (analyzedSource == null) return null
++          if (source === analyzedSource && lateAddedImports.size === 0) {
++            return null
++          }
+ 
+           const environment = this.environment as DevEnvironment
+           const moduleGraph = environment.moduleGraph

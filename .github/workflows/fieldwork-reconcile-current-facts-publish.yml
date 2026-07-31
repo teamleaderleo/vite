@@ -1,0 +1,79 @@
+name: Fieldwork reconcile current transform facts
+
+on:
+  pull_request:
+    branches:
+      - fieldwork/25-late-import-reconciliation-843a47
+    paths:
+      - .github/workflows/fieldwork-reconcile-current-facts-publish.yml
+      - fieldwork-experiments/25-reconcile-current-facts/reconcile-current-facts.patch
+      - packages/vite/src/node/__tests__/server/post-transform-import-analysis-reconcile-watchfile.spec.js
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - name: Check out exact branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: fieldwork/25-reconcile-snapshot-order-repair
+
+      - name: Record exact input head
+        run: |
+          echo "input_sha=$(git rev-parse HEAD)"
+          test -f fieldwork-experiments/25-reconcile-current-facts/reconcile-current-facts.patch
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Set up Node 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install exact dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply retained source repair
+        run: git apply --index fieldwork-experiments/25-reconcile-current-facts/reconcile-current-facts.patch
+
+      - name: Check focused source and types
+        run: |
+          pnpm exec eslint --cache --concurrency auto \
+            packages/vite/src/node/plugins/importAnalysisReconcile.ts \
+            packages/vite/src/node/plugins/index.ts
+          pnpm run typecheck
+
+      - name: Run reconciliation and adversarial controls
+        run: >-
+          pnpm exec vitest run
+          packages/vite/src/node/__tests__/server/post-transform-import-analysis-reconcile.spec.js
+          packages/vite/src/node/__tests__/server/post-transform-import-analysis-reconcile-watchfile.spec.js
+
+      - name: Check formatting and diff hygiene
+        run: |
+          pnpm exec prettier --check \
+            packages/vite/src/node/plugins/importAnalysisReconcile.ts \
+            packages/vite/src/node/__tests__/server/post-transform-import-analysis-reconcile.spec.js \
+            packages/vite/src/node/__tests__/server/post-transform-import-analysis-reconcile-watchfile.spec.js
+          git diff --check
+
+      - name: Publish tested source and controls
+        run: |
+          rm -f .github/workflows/fieldwork-reconcile-current-facts-publish.yml
+          rm -f fieldwork-experiments/25-reconcile-current-facts/reconcile-current-facts.patch
+          rmdir fieldwork-experiments/25-reconcile-current-facts 2>/dev/null || true
+          rmdir fieldwork-experiments 2>/dev/null || true
+          git add -A
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(dev): reconcile final transform graph facts'
+          git push origin HEAD:fieldwork/25-reconcile-snapshot-order-repair
