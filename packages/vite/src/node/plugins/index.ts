@@ -17,6 +17,7 @@ import { resolveBuildPlugins } from '../build'
 import { oxcResolvePlugin } from './resolve'
 import { optimizedDepsPlugin } from './optimizedDeps'
 import { importAnalysisPlugin } from './importAnalysis'
+import { importAnalysisReconcilePlugins } from './importAnalysisReconcile'
 import { cssAnalysisPlugin, cssPlugin, cssPostPlugin } from './css'
 import { assetPlugin } from './asset'
 import { clientInjectionsPlugin } from './clientInjections'
@@ -153,6 +154,7 @@ export async function resolvePlugins(
     clientInjectionsPlugin(config),
     cssAnalysisPlugin(config),
     importAnalysisPlugin(config),
+    ...importAnalysisReconcilePlugins(config),
   ].filter(Boolean) as Plugin[]
 }
 

@@ -1,0 +1,59 @@
+name: Fieldwork post transform import reconciliation
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/fieldwork-post-transform-import-reconciliation.yml"
+      - "packages/vite/src/node/plugins/importAnalysisReconcile.ts"
+      - "packages/vite/src/node/plugins/index.ts"
+      - "packages/vite/src/node/__tests__/server/post-transform-import-analysis-reconcile.spec.js"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  focused-reconciliation:
+    name: Node 24 focused reconciliation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+    steps:
+      - name: Checkout exact carrier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Set up Node 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install exact workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check formatting
+        run: pnpm format && git diff --exit-code
+
+      - name: Check focused source lint
+        run: >-
+          pnpm exec eslint --cache --concurrency auto
+          packages/vite/src/node/plugins/importAnalysisReconcile.ts
+          packages/vite/src/node/plugins/index.ts
+
+      - name: Check workspace types
+        run: pnpm run typecheck
+
+      - name: Run focused reconciliation controls
+        run: >-
+          pnpm exec vitest run
+          packages/vite/src/node/__tests__/server/post-transform-import-analysis-reconcile.spec.js
+
+      - name: Check tracked diff hygiene
+        run: |
+          git diff --check
+          test -z "$(git status --short --untracked-files=no)"
