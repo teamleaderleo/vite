@@ -226,18 +226,21 @@ test('rejects a changed nonliteral dynamic import expression', async () => {
     'src/dep-b.js': "export const dep = 'B'",
   })
 
+  let changedExpression = false
   const server = await createTestServer(root, [
     {
       name: 'replace-dynamic-import-expression',
       transform: {
         order: 'post',
         handler(code, id) {
-          if (normalizePath(id).endsWith('/src/main.js')) {
-            return code.replace(
-              'import(/* @vite-ignore */ target)',
-              'import(/* @vite-ignore */ other)',
-            )
-          }
+          if (!normalizePath(id).endsWith('/src/main.js')) return
+          const analyzedExpression = "__vite__injectQuery(target, 'import')"
+          if (!code.includes(analyzedExpression)) return
+          changedExpression = true
+          return code.replace(
+            analyzedExpression,
+            "__vite__injectQuery(other, 'import')",
+          )
         },
       },
     },
@@ -246,6 +249,7 @@ test('rejects a changed nonliteral dynamic import expression', async () => {
   await expect(server.transformRequest('/src/main.js')).rejects.toThrow(
     'introduced a dynamic import expression',
   )
+  expect(changedExpression).toBe(true)
 })
 
 test('rejects a late import whose resolved file needs a different browser URL', async () => {
