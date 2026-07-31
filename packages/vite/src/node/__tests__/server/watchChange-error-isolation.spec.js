@@ -88,6 +88,66 @@ test('watchChange errors do not prevent invalidation or HMR', async () => {
   expect(refreshed?.code).toContain('beta')
 })
 
+test.each([
+  ['add', 'create'],
+  ['unlink', 'delete'],
+])(
+  "watchChange errors do not prevent '%s' hot updates",
+  async (watcherEvent, expectedType) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'vite-watch-change-'))
+    onTestFinished(() => rm(root, { recursive: true, force: true }))
+
+    const stateFile = path.join(root, 'state.txt')
+    const watchChangeError = new Error('watchChange rejection')
+    const loggedError = promiseWithResolvers()
+    const hotUpdateCalled = promiseWithResolvers()
+    const loggedErrors = []
+    const watchChangeEvents = []
+    const hotUpdateTypes = []
+    const logger = createLogger('silent')
+    logger.error = (error) => {
+      loggedErrors.push(error)
+      loggedError.resolve()
+    }
+
+    const server = await createServer({
+      root,
+      configFile: false,
+      logLevel: 'silent',
+      customLogger: logger,
+      plugins: [
+        {
+          name: 'watch-change-state',
+          watchChange(id, { event }) {
+            if (path.resolve(id) === stateFile) {
+              watchChangeEvents.push(event)
+              throw watchChangeError
+            }
+          },
+          hotUpdate({ file, type }) {
+            if (path.resolve(file) === stateFile) {
+              hotUpdateTypes.push(type)
+              hotUpdateCalled.resolve()
+              return []
+            }
+          },
+        },
+      ],
+      server: { middlewareMode: true, ws: false },
+    })
+    onTestFinished(() => server.close())
+
+    server.watcher.emit(watcherEvent, stateFile)
+
+    await withTimeout(loggedError.promise, 'watchChange error was not logged')
+    await withTimeout(hotUpdateCalled.promise, 'hotUpdate hook was not reached')
+
+    expect(loggedErrors).toContain(watchChangeError)
+    expect(watchChangeEvents).toContain(expectedType)
+    expect(hotUpdateTypes).toContain(expectedType)
+  },
+)
+
 async function writeProject(root, files) {
   for (const [relativePath, content] of Object.entries(files)) {
     const filename = path.join(root, relativePath)
