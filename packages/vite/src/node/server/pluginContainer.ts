@@ -662,33 +662,40 @@ class EnvironmentPluginContainer<Env extends Environment = Environment> {
     }
   }
 
-  async watchChange(
-    id: string,
-    change: { event: 'create' | 'update' | 'delete' },
-    onError?: (error: Parameters<Logger['error']>[0]) => void,
-  ): Promise<void> {
+  private shouldRunWatchChange(plugin: Plugin): boolean {
     const config = this.environment.getTopLevelConfig()
-    const condition = (plugin: Plugin) =>
+    return (
       this.environment.name === 'client' ||
       config.server.perEnvironmentWatchChangeDuringDev ||
       plugin.perEnvironmentWatchChangeDuringDev
+    )
+  }
 
-    if (onError) {
-      await this.hookParallelWithErrorHandler(
-        'watchChange',
-        (plugin) => this._getPluginContext(plugin),
-        () => [id, change],
-        onError,
-        condition,
-      )
-    } else {
-      await this.hookParallel(
-        'watchChange',
-        (plugin) => this._getPluginContext(plugin),
-        () => [id, change],
-        condition,
-      )
-    }
+  async watchChange(
+    id: string,
+    change: { event: 'create' | 'update' | 'delete' },
+  ): Promise<void> {
+    await this.hookParallel(
+      'watchChange',
+      (plugin) => this._getPluginContext(plugin),
+      () => [id, change],
+      (plugin) => this.shouldRunWatchChange(plugin),
+    )
+  }
+
+  /** @internal */
+  async watchChangeWithErrorHandler(
+    id: string,
+    change: { event: 'create' | 'update' | 'delete' },
+    onError: (error: Parameters<Logger['error']>[0]) => void,
+  ): Promise<void> {
+    await this.hookParallelWithErrorHandler(
+      'watchChange',
+      (plugin) => this._getPluginContext(plugin),
+      () => [id, change],
+      onError,
+      (plugin) => this.shouldRunWatchChange(plugin),
+    )
   }
   async close(): Promise<void> {
     if (this._closed) return
