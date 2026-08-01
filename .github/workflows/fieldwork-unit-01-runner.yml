@@ -1,9 +1,7 @@
 name: Fieldwork Unit 01 settlement runner
 
 on:
-  push:
-    branches:
-      - unit-01/watchchange-settlement-runner-base
+  pull_request:
 
 permissions:
   contents: write
@@ -14,13 +12,15 @@ concurrency:
 
 jobs:
   run:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    if: github.event.pull_request.base.ref == 'unit-01/watchchange-settlement-runner-base'
+    runs-on: ubuntu-slim
+    timeout-minutes: 45
     steps:
       - name: Checkout canonical source branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: fix/fieldwork-25-watchchange-error-isolation
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Install pnpm
@@ -32,45 +32,161 @@ jobs:
           node-version: 24
           cache: pnpm
 
-      - name: Execute reviewed carrier scripts
+      - name: Collect plugin failures before server logging
         run: |
           python3 <<'PY'
           from pathlib import Path
-          import subprocess
+          from textwrap import dedent, indent
 
-          lines = Path(
-            '.github/workflows/fieldwork-watchchange-plugin-settlement.yml'
-          ).read_text().splitlines()
+          container = Path('packages/vite/src/node/server/pluginContainer.ts')
+          text = container.read_text()
 
-          def extract(name: str) -> str:
-            start = lines.index(f'      - name: {name}')
-            run = next(
-              index for index in range(start + 1, len(lines))
-              if lines[index] == '        run: |'
+          helper_start = text.index('  private async hookParallelWithErrorHandler<')
+          helper_end = text.index('  async buildStart(_options?: InputOptions): Promise<void> {', helper_start)
+          helper = indent(
+            dedent('''\
+          private async hookParallelAndCollectErrors<
+            H extends AsyncPluginHooks & ParallelPluginHooks,
+          >(
+            hookName: H,
+            context: (plugin: Plugin) => ThisType<FunctionPluginHooks[H]>,
+            args: (plugin: Plugin) => Parameters<FunctionPluginHooks[H]>,
+            condition?: (plugin: Plugin) => boolean | undefined,
+          ): Promise<Parameters<Logger['error']>[0][]> {
+            const errors: Parameters<Logger['error']>[0][] = []
+            const parallelPromises: Promise<void>[] = []
+            const runHook = async (plugin: Plugin) => {
+              const hook = plugin[hookName]
+              const handler: Function = getHookHandler(hook)
+              try {
+                await this.handleHookPromise(
+                  handler.apply(context(plugin), args(plugin)),
+                )
+              } catch (error) {
+                errors.push(error as Parameters<Logger['error']>[0])
+              }
+            }
+
+            for (const plugin of this.getSortedPlugins(hookName)) {
+              if (condition && !condition(plugin)) continue
+
+              const hook = plugin[hookName]
+              if ((hook as { sequential?: boolean }).sequential) {
+                await Promise.all(parallelPromises)
+                parallelPromises.length = 0
+                await runHook(plugin)
+              } else {
+                parallelPromises.push(runHook(plugin))
+              }
+            }
+            await Promise.all(parallelPromises)
+            return errors
+          }
+
+          '''),
+            '  ',
+          )
+          text = text[:helper_start] + helper + text[helper_end:]
+
+          internal_start = text.index('  /** @internal */\n  async watchChangeWithErrorHandler(')
+          internal_end = text.index('\n  async close(): Promise<void> {', internal_start)
+          internal = indent(
+            dedent('''\
+          /** @internal */
+          async watchChangeAndCollectErrors(
+            id: string,
+            change: { event: 'create' | 'update' | 'delete' },
+          ): Promise<Parameters<Logger['error']>[0][]> {
+            return this.hookParallelAndCollectErrors(
+              'watchChange',
+              (plugin) => this._getPluginContext(plugin),
+              () => [id, change],
+              (plugin) => this.shouldRunWatchChange(plugin),
             )
-            body = []
-            for line in lines[run + 1:]:
-              if line.startswith('      - name: '):
-                break
-              body.append(line[10:] if line.startswith('          ') else line)
-            return '\n'.join(body) + '\n'
+          }
 
-          for step in (
-            'Apply plugin settlement repair',
-            'Add adversarial controls',
-          ):
-            subprocess.run(
-              extract(step),
-              shell=True,
-              check=True,
-              executable='/bin/bash',
+          '''),
+            '  ',
+          ).rstrip()
+          text = text[:internal_start] + internal + text[internal_end:]
+          container.write_text(text)
+
+          server = Path('packages/vite/src/node/server/index.ts')
+          text = server.read_text()
+          helper_start = text.index('  const notifyWatchChange = async (')
+          helper_end = text.index('\n\n  const onFileAddUnlink', helper_start)
+          helper = indent(
+            dedent('''\
+          const notifyWatchChange = async (
+            file: string,
+            event: 'create' | 'update' | 'delete',
+          ) => {
+            const results = await Promise.allSettled(
+              Object.values(server.environments).map((environment) =>
+                environment.pluginContainer.watchChangeAndCollectErrors(file, {
+                  event,
+                }),
+              ),
             )
+            for (const result of results) {
+              if (result.status === 'rejected') {
+                server.config.logger.error(result.reason)
+              } else {
+                for (const error of result.value) {
+                  server.config.logger.error(error)
+                }
+              }
+            }
+          }
+          '''),
+            '  ',
+          ).rstrip()
+          server.write_text(text[:helper_start] + helper + text[helper_end:])
+
+          test_file = Path('packages/vite/src/node/__tests__/server/watchChange-error-isolation.spec.js')
+          text = test_file.read_text()
+          text = text.replace(
+            '  const fastLogged = promiseWithResolvers()\n',
+            '  const fastRejected = promiseWithResolvers()\n',
+            1,
+          )
+          old_logger = '''  logger.error = (error) => {
+    loggedErrors.push(error)
+    if (error === fastError) fastLogged.resolve()
+  }
+'''
+          new_logger = '''  logger.error = (error) => loggedErrors.push(error)
+'''
+          if old_logger not in text:
+            raise SystemExit('multi-plugin logger block not found')
+          text = text.replace(old_logger, new_logger, 1)
+          old_throw = '''          events.push('fast:error')
+          throw fastError
+'''
+          new_throw = '''          events.push('fast:error')
+          fastRejected.resolve()
+          throw fastError
+'''
+          if old_throw not in text:
+            raise SystemExit('fast rejection block not found')
+          text = text.replace(old_throw, new_throw, 1)
+          old_wait = "  await withTimeout(fastLogged.promise, 'fast error was not logged')\n"
+          new_wait = "  await withTimeout(fastRejected.promise, 'fast hook did not reject')\n"
+          if old_wait not in text:
+            raise SystemExit('fast logged wait not found')
+          text = text.replace(old_wait, new_wait, 1)
+          old_expect = "  expect(events).toEqual(['fast:start', 'slow:start', 'fast:error'])\n"
+          new_expect = old_expect + '  expect(loggedErrors).toEqual([])\n'
+          if old_expect not in text:
+            raise SystemExit('blocked-event assertion not found')
+          text = text.replace(old_expect, new_expect, 1)
+          test_file.write_text(text)
           PY
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Format changed source
+      - name: Format source and tests
         run: |
           pnpm exec oxfmt --write \
             packages/vite/src/node/server/index.ts \
@@ -80,28 +196,37 @@ jobs:
       - name: Build Vite
         run: pnpm run build
 
+      - name: Verify internal collector is absent from declarations
+        run: |
+          if find packages/vite/dist -name '*.d.ts' -print0 | xargs -0 grep -n 'watchChangeAndCollectErrors'; then
+            echo 'internal watchChange collector leaked into generated declarations' >&2
+            exit 1
+          fi
+
       - name: Run focused watchChange tests
         run: pnpm exec vitest run packages/vite/src/node/__tests__/server/watchChange-error-isolation.spec.js
 
-      - name: Lint changed source
+      - name: Lint changed source and tests
         run: |
           pnpm exec eslint \
             packages/vite/src/node/server/index.ts \
             packages/vite/src/node/server/pluginContainer.ts \
             packages/vite/src/node/__tests__/server/watchChange-error-isolation.spec.js
 
-      - name: Commit clean repaired source
+      - name: Commit clean settle-before-log source
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          rm .github/workflows/fieldwork-watchchange-plugin-settlement.yml
+          git checkout e6b6b167afa0a80548829d1f24a0712f9194389a -- .github/workflows/ci.yml
+          rm -f .fieldwork-unit-01-settle-log-trigger
           git config user.name fieldwork-bot
           git config user.email fieldwork-bot@users.noreply.github.com
           git add \
             packages/vite/src/node/server/index.ts \
             packages/vite/src/node/server/pluginContainer.ts \
             packages/vite/src/node/__tests__/server/watchChange-error-isolation.spec.js \
-            .github/workflows/fieldwork-watchchange-plugin-settlement.yml
-          git commit -m "fix(dev): settle watchChange hooks before invalidation"
+            .github/workflows/ci.yml \
+            .fieldwork-unit-01-settle-log-trigger
+          git commit -m "refactor(dev): settle watchChange before logging"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin HEAD:fix/fieldwork-25-watchchange-error-isolation
