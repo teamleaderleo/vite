@@ -92,8 +92,8 @@ jobs:
 
           server = Path('packages/vite/src/node/server/index.ts')
           text = server.read_text()
-          old = 'environment.pluginContainer.watchChange(\n'
-          new = 'environment.pluginContainer.watchChangeWithErrorHandler(\n'
+          old = 'environment.pluginContainer.watchChange('
+          new = 'environment.pluginContainer.watchChangeWithErrorHandler('
           if old not in text:
             raise SystemExit('watcher callback call not found')
           server.write_text(text.replace(old, new, 1))
