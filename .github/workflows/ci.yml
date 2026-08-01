@@ -1,5 +1,8 @@
 name: CI
 
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+
 permissions: {}
 
 on:
@@ -14,8 +17,8 @@ jobs:
     if: github.head_ref == 'fix/fieldwork-25-watchchange-error-isolation'
     permissions:
       contents: write
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    runs-on: ubuntu-slim
+    timeout-minutes: 45
     name: Fieldwork Unit 01 source repair
     steps:
       - name: Checkout canonical source branch
