@@ -869,7 +869,9 @@ export async function _createServer(
   ) => {
     const results = await Promise.allSettled(
       Object.values(server.environments).map((environment) =>
-        environment.pluginContainer.watchChange(file, { event }),
+        environment.pluginContainer.watchChange(file, { event }, (error) =>
+          server.config.logger.error(error),
+        ),
       ),
     )
     for (const result of results) {

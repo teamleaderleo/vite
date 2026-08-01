@@ -325,6 +325,43 @@ class EnvironmentPluginContainer<Env extends Environment = Environment> {
     await Promise.all(parallelPromises)
   }
 
+  private async hookParallelWithErrorHandler<
+    H extends AsyncPluginHooks & ParallelPluginHooks,
+  >(
+    hookName: H,
+    context: (plugin: Plugin) => ThisType<FunctionPluginHooks[H]>,
+    args: (plugin: Plugin) => Parameters<FunctionPluginHooks[H]>,
+    onError: (error: Parameters<Logger['error']>[0]) => void,
+    condition?: (plugin: Plugin) => boolean | undefined,
+  ): Promise<void> {
+    const parallelPromises: Promise<void>[] = []
+    const runHook = async (plugin: Plugin) => {
+      const hook = plugin[hookName]
+      const handler: Function = getHookHandler(hook)
+      try {
+        await this.handleHookPromise(
+          handler.apply(context(plugin), args(plugin)),
+        )
+      } catch (error) {
+        onError(error as Parameters<Logger['error']>[0])
+      }
+    }
+
+    for (const plugin of this.getSortedPlugins(hookName)) {
+      if (condition && !condition(plugin)) continue
+
+      const hook = plugin[hookName]
+      if ((hook as { sequential?: boolean }).sequential) {
+        await Promise.all(parallelPromises)
+        parallelPromises.length = 0
+        await runHook(plugin)
+      } else {
+        parallelPromises.push(runHook(plugin))
+      }
+    }
+    await Promise.all(parallelPromises)
+  }
+
   async buildStart(_options?: InputOptions): Promise<void> {
     if (this._started) {
       if (this._buildStartPromise) {
@@ -628,19 +665,31 @@ class EnvironmentPluginContainer<Env extends Environment = Environment> {
   async watchChange(
     id: string,
     change: { event: 'create' | 'update' | 'delete' },
+    onError?: (error: Parameters<Logger['error']>[0]) => void,
   ): Promise<void> {
     const config = this.environment.getTopLevelConfig()
-    await this.hookParallel(
-      'watchChange',
-      (plugin) => this._getPluginContext(plugin),
-      () => [id, change],
-      (plugin) =>
-        this.environment.name === 'client' ||
-        config.server.perEnvironmentWatchChangeDuringDev ||
-        plugin.perEnvironmentWatchChangeDuringDev,
-    )
-  }
+    const condition = (plugin: Plugin) =>
+      this.environment.name === 'client' ||
+      config.server.perEnvironmentWatchChangeDuringDev ||
+      plugin.perEnvironmentWatchChangeDuringDev
 
+    if (onError) {
+      await this.hookParallelWithErrorHandler(
+        'watchChange',
+        (plugin) => this._getPluginContext(plugin),
+        () => [id, change],
+        onError,
+        condition,
+      )
+    } else {
+      await this.hookParallel(
+        'watchChange',
+        (plugin) => this._getPluginContext(plugin),
+        () => [id, change],
+        condition,
+      )
+    }
+  }
   async close(): Promise<void> {
     if (this._closed) return
     this._closed = true

@@ -1,31 +1,175 @@
 name: CI
 
 env:
-  NODE_OPTIONS: --max-old-space-size=4096
+  # 7 GiB by default on GitHub, setting to 6 GiB
+  # https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners#supported-runners-and-hardware-resources
+  NODE_OPTIONS: --max-old-space-size=6144
+  # install playwright binary manually (because pnpm only runs install script once)
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+  # Vitest auto retry on flaky segfault
+  VITEST_SEGFAULT_RETRY: 3
 
+# Remove default permissions of GITHUB_TOKEN for security
+# https://docs.github.com/en/actions/using-jobs/assigning-permissions-to-jobs
 permissions: {}
 
 on:
+  push:
+    branches:
+      - main
+      - release/*
+      - feat/*
+      - fix/*
+      - perf/*
+      - "v[0-9]+" # v1, v2, ...
+      - "v[0-9]+.[0-9]+" # v4.0, v4.1, ...
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.number || github.sha }}
   cancel-in-progress: true
 
 jobs:
-  fieldwork-unit-01-repair:
-    if: github.head_ref == 'fix/fieldwork-25-watchchange-error-isolation'
-    permissions:
-      contents: write
+  changed:
+    name: Get changed files
     runs-on: ubuntu-slim
-    timeout-minutes: 45
-    name: Fieldwork Unit 01 source repair
+    outputs:
+      should_skip: ${{ steps.changed-files.outputs.only_changed == 'true' }}
+
     steps:
-      - name: Checkout canonical source branch
+      - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: fix/fieldwork-25-watchchange-error-isolation
-          fetch-depth: 0
+          # Assume PRs are less than 50 commits
+          fetch-depth: 50
+          persist-credentials: false
+
+      - name: Get changed files
+        id: changed-files
+        uses: tj-actions/changed-files@9426d40962ed5378910ee2e21d5f8c6fcbf2dd96 # v47.0.6
+        with:
+          files: |
+            docs/**
+            .github/**
+            !.github/workflows/ci.yml
+            packages/create-vite/template**
+            **.md
+
+  test:
+    needs: changed
+    if: needs.changed.outputs.should_skip != 'true'
+    timeout-minutes: 20
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        node_version: [20, 22, 24, 26]
+        include:
+          # Active LTS + other OS
+          - os: macos-latest
+            node_version: 24
+          - os: windows-latest
+            # use older minor to workaround https://github.com/nodejs/node/issues/63638
+            node_version: 24.15.0
+      fail-fast: false
+
+    name: "Build&Test: node-${{ matrix.node_version }}, ${{ matrix.os }}"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - if: matrix.node_version != '20'
+        name: Set node version to ${{ matrix.node_version }}
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ matrix.node_version }}
+          cache: "pnpm"
+      - if: matrix.node_version == '20' # use node 24 for builds
+        name: Set node version to 24 for builds
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+
+      - name: Install deps
+        run: pnpm install
+
+      # Install playwright's binary under custom directory to cache
+      - name: (non-windows) Set Playwright path and Get playwright version
+        if: runner.os != 'Windows'
+        run: |
+          echo "PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/playwright-bin" >> $GITHUB_ENV
+          PLAYWRIGHT_VERSION="$(pnpm ls --depth 0 --json -w playwright-chromium | jq --raw-output '.[0].devDependencies["playwright-chromium"].version')"
+          echo "PLAYWRIGHT_VERSION=$PLAYWRIGHT_VERSION" >> $GITHUB_ENV
+      - name: (windows) Set Playwright path and Get playwright version
+        if: runner.os == 'Windows'
+        run: |
+          echo "PLAYWRIGHT_BROWSERS_PATH=$HOME\.cache\playwright-bin" >> $env:GITHUB_ENV
+          $env:PLAYWRIGHT_VERSION="$(pnpm ls --depth 0 --json -w playwright-chromium | jq --raw-output '.[0].devDependencies["playwright-chromium"].version')"
+          echo "PLAYWRIGHT_VERSION=$env:PLAYWRIGHT_VERSION" >> $env:GITHUB_ENV
+
+      - name: Cache Playwright's binary
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          key: ${{ runner.os }}-playwright-bin-v1-${{ env.PLAYWRIGHT_VERSION }}
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-bin-v1-
+
+      - name: Install Playwright
+        # does not need to explicitly set chromium after https://github.com/microsoft/playwright/issues/14862 is solved
+        run: pnpm playwright install chromium
+
+      - name: Build
+        run: pnpm run build
+
+      - if: matrix.node_version == '20'
+        name: Set node version to ${{ matrix.node_version }}
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ matrix.node_version }}
+          cache: "pnpm"
+
+      - name: Test unit
+        run: pnpm run test-unit
+
+      - name: Test serve
+        run: pnpm run test-serve
+
+      - name: Test serve (bundled dev)
+        run: pnpm run test-serve-bundled
+
+      - name: Test build
+        run: pnpm run test-build
+
+  test-passed:
+    if: (!cancelled() && !failure())
+    needs: test
+    runs-on: ubuntu-slim
+    name: Build & Test Passed or Skipped
+    steps:
+      - run: echo "Build & Test Passed or Skipped"
+
+  test-failed:
+    if: (!cancelled() && failure())
+    needs: test
+    runs-on: ubuntu-slim
+    name: Build & Test Failed
+    steps:
+      - run: echo "Build & Test Failed"
+
+  lint:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    name: "Lint: node-24, ubuntu-latest"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
           persist-credentials: false
 
       - name: Install pnpm
@@ -35,181 +179,28 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 24
-          cache: pnpm
+          cache: "pnpm"
 
-      - name: Apply deterministic source repair
-        run: |
-          python3 <<'PY'
-          from pathlib import Path
-          from textwrap import dedent, indent
+      - name: Install deps
+        run: pnpm install
 
-          container = Path('packages/vite/src/node/server/pluginContainer.ts')
-          text = container.read_text()
-
-          helper = indent(
-            dedent('''\
-          private async hookParallelWithErrorHandler<
-            H extends AsyncPluginHooks & ParallelPluginHooks,
-          >(
-            hookName: H,
-            context: (plugin: Plugin) => ThisType<FunctionPluginHooks[H]>,
-            args: (plugin: Plugin) => Parameters<FunctionPluginHooks[H]>,
-            onError: (error: Parameters<Logger['error']>[0]) => void,
-            condition?: (plugin: Plugin) => boolean | undefined,
-          ): Promise<void> {
-            const parallelPromises: Promise<void>[] = []
-            const runHook = async (plugin: Plugin) => {
-              const hook = plugin[hookName]
-              const handler: Function = getHookHandler(hook)
-              try {
-                await this.handleHookPromise(
-                  handler.apply(context(plugin), args(plugin)),
-                )
-              } catch (error) {
-                onError(error as Parameters<Logger['error']>[0])
-              }
-            }
-
-            for (const plugin of this.getSortedPlugins(hookName)) {
-              if (condition && !condition(plugin)) continue
-
-              const hook = plugin[hookName]
-              if ((hook as { sequential?: boolean }).sequential) {
-                await Promise.all(parallelPromises)
-                parallelPromises.length = 0
-                await runHook(plugin)
-              } else {
-                parallelPromises.push(runHook(plugin))
-              }
-            }
-            await Promise.all(parallelPromises)
-          }
-
-          '''),
-            '  ',
-          )
-          marker = '  async buildStart(_options?: InputOptions): Promise<void> {\n'
-          if 'hookParallelWithErrorHandler' not in text:
-            text = text.replace(marker, helper + marker, 1)
-
-          class_start = text.index('class EnvironmentPluginContainer')
-          method_start = text.index('  async watchChange(\n', class_start)
-          method_end = text.index('\n  async close(): Promise<void> {', method_start)
-          method = indent(
-            dedent('''\
-          async watchChange(
-            id: string,
-            change: { event: 'create' | 'update' | 'delete' },
-            onError?: (error: Parameters<Logger['error']>[0]) => void,
-          ): Promise<void> {
-            const config = this.environment.getTopLevelConfig()
-            const condition = (plugin: Plugin) =>
-              this.environment.name === 'client' ||
-              config.server.perEnvironmentWatchChangeDuringDev ||
-              plugin.perEnvironmentWatchChangeDuringDev
-
-            if (onError) {
-              await this.hookParallelWithErrorHandler(
-                'watchChange',
-                (plugin) => this._getPluginContext(plugin),
-                () => [id, change],
-                onError,
-                condition,
-              )
-            } else {
-              await this.hookParallel(
-                'watchChange',
-                (plugin) => this._getPluginContext(plugin),
-                () => [id, change],
-                condition,
-              )
-            }
-          }
-          '''),
-            '  ',
-          ).rstrip()
-          text = text[:method_start] + method + text[method_end:]
-          container.write_text(text)
-
-          server = Path('packages/vite/src/node/server/index.ts')
-          text = server.read_text()
-          old = '        environment.pluginContainer.watchChange(file, { event }),\n'
-          new = (
-            '        environment.pluginContainer.watchChange(\n'
-            '          file,\n'
-            '          { event },\n'
-            '          (error) => server.config.logger.error(error),\n'
-            '        ),\n'
-          )
-          if old not in text:
-            raise SystemExit('server watchChange call marker not found')
-          server.write_text(text.replace(old, new, 1))
-          PY
-
-      - name: Add adversarial controls
-        run: |
-          python3 <<'PY'
-          from pathlib import Path
-          import subprocess
-
-          lines = Path(
-            '.github/workflows/fieldwork-watchchange-plugin-settlement.yml'
-          ).read_text().splitlines()
-          start = lines.index('      - name: Add adversarial controls')
-          run = next(
-            index for index in range(start + 1, len(lines))
-            if lines[index] == '        run: |'
-          )
-          body = []
-          for line in lines[run + 1:]:
-            if line.startswith('      - name: '):
-              break
-            body.append(line[10:] if line.startswith('          ') else line)
-          subprocess.run(
-            '\n'.join(body) + '\n',
-            shell=True,
-            check=True,
-            executable='/bin/bash',
-          )
-          PY
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Format changed source
-        run: |
-          pnpm exec oxfmt --write \
-            packages/vite/src/node/server/index.ts \
-            packages/vite/src/node/server/pluginContainer.ts \
-            packages/vite/src/node/__tests__/server/watchChange-error-isolation.spec.js
-
-      - name: Build Vite
+      - name: Build
         run: pnpm run build
 
-      - name: Run focused watchChange tests
-        run: pnpm exec vitest run packages/vite/src/node/__tests__/server/watchChange-error-isolation.spec.js
+      - name: Lint
+        run: pnpm run lint
 
-      - name: Lint changed source
-        run: |
-          pnpm exec eslint \
-            packages/vite/src/node/server/index.ts \
-            packages/vite/src/node/server/pluginContainer.ts \
-            packages/vite/src/node/__tests__/server/watchChange-error-isolation.spec.js
+      - name: Check formatting
+        run: pnpm format && git diff --exit-code
 
-      - name: Commit clean repaired source
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Test docs
+        run: pnpm run test-docs
+
+      # From https://github.com/rhysd/actionlint/blob/main/docs/usage.md#use-actionlint-on-github-actions
+      - name: Check workflow files
         run: |
-          git checkout e6b6b167afa0a80548829d1f24a0712f9194389a -- .github/workflows/ci.yml
-          rm .github/workflows/fieldwork-watchchange-plugin-settlement.yml
-          git config user.name fieldwork-bot
-          git config user.email fieldwork-bot@users.noreply.github.com
-          git add \
-            packages/vite/src/node/server/index.ts \
-            packages/vite/src/node/server/pluginContainer.ts \
-            packages/vite/src/node/__tests__/server/watchChange-error-isolation.spec.js \
-            .github/workflows/ci.yml \
-            .github/workflows/fieldwork-watchchange-plugin-settlement.yml
-          git commit -m "fix(dev): settle watchChange hooks before invalidation"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git push origin HEAD:fix/fieldwork-25-watchchange-error-isolation
+          bash <(curl https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color -shellcheck=""

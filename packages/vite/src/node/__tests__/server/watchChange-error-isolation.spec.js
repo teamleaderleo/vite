@@ -148,6 +148,165 @@ test.each([
   },
 )
 
+test('settles every watchChange hook before HMR and preserves barriers', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'vite-watch-change-'))
+  onTestFinished(() => rm(root, { recursive: true, force: true }))
+
+  const stateFile = path.join(root, 'state.txt')
+  await writeProject(root, { 'state.txt': 'alpha\n' })
+
+  const fastError = new Error('fast watchChange rejection')
+  const slowError = new Error('slow watchChange rejection')
+  const slowStarted = promiseWithResolvers()
+  const releaseSlow = promiseWithResolvers()
+  const fastLogged = promiseWithResolvers()
+  const hotUpdateCalled = promiseWithResolvers()
+  const events = []
+  const loggedErrors = []
+
+  const logger = createLogger('silent')
+  logger.error = (error) => {
+    loggedErrors.push(error)
+    if (error === fastError) fastLogged.resolve()
+  }
+
+  const server = await createServer({
+    root,
+    configFile: false,
+    logLevel: 'silent',
+    customLogger: logger,
+    plugins: [
+      {
+        name: 'fast-watch-change',
+        async watchChange(id) {
+          if (path.resolve(id) !== stateFile) return
+          events.push('fast:start')
+          await slowStarted.promise
+          events.push('fast:error')
+          throw fastError
+        },
+      },
+      {
+        name: 'slow-watch-change',
+        async watchChange(id) {
+          if (path.resolve(id) !== stateFile) return
+          events.push('slow:start')
+          slowStarted.resolve()
+          await releaseSlow.promise
+          events.push('slow:error')
+          throw slowError
+        },
+      },
+      {
+        name: 'sequential-watch-change',
+        watchChange: {
+          sequential: true,
+          handler(id) {
+            if (path.resolve(id) === stateFile) events.push('sequential')
+          },
+        },
+      },
+      {
+        name: 'later-watch-change',
+        watchChange(id) {
+          if (path.resolve(id) === stateFile) events.push('later')
+        },
+      },
+      {
+        name: 'watch-change-observer',
+        hotUpdate({ file }) {
+          if (this.environment.name !== 'client') return
+          if (path.resolve(file) === stateFile) {
+            events.push('hmr')
+            hotUpdateCalled.resolve()
+            return []
+          }
+        },
+      },
+    ],
+    server: { middlewareMode: true, ws: false },
+  })
+  onTestFinished(async () => {
+    releaseSlow.resolve()
+    await server.close()
+  })
+
+  server.watcher.emit('change', stateFile)
+
+  await withTimeout(fastLogged.promise, 'fast error was not logged')
+  await new Promise((resolve) => setImmediate(resolve))
+  expect(events).toEqual(['fast:start', 'slow:start', 'fast:error'])
+
+  releaseSlow.resolve()
+  await withTimeout(hotUpdateCalled.promise, 'hotUpdate hook was not reached')
+
+  expect(loggedErrors).toEqual([fastError, slowError])
+  expect(events).toEqual([
+    'fast:start',
+    'slow:start',
+    'fast:error',
+    'slow:error',
+    'sequential',
+    'later',
+    'hmr',
+  ])
+})
+
+test('continues later watchChange hooks after a synchronous error', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'vite-watch-change-'))
+  onTestFinished(() => rm(root, { recursive: true, force: true }))
+
+  const stateFile = path.join(root, 'state.txt')
+  await writeProject(root, { 'state.txt': 'alpha\n' })
+
+  const watchChangeError = new Error('synchronous watchChange rejection')
+  const hotUpdateCalled = promiseWithResolvers()
+  const loggedErrors = []
+  let laterWatchChangeCalled = false
+
+  const logger = createLogger('silent')
+  logger.error = (error) => loggedErrors.push(error)
+
+  const server = await createServer({
+    root,
+    configFile: false,
+    logLevel: 'silent',
+    customLogger: logger,
+    plugins: [
+      {
+        name: 'throwing-watch-change',
+        watchChange(id) {
+          if (path.resolve(id) === stateFile) throw watchChangeError
+        },
+      },
+      {
+        name: 'later-watch-change',
+        watchChange(id) {
+          if (path.resolve(id) === stateFile) laterWatchChangeCalled = true
+        },
+      },
+      {
+        name: 'watch-change-observer',
+        hotUpdate({ file }) {
+          if (this.environment.name !== 'client') return
+          if (path.resolve(file) === stateFile) {
+            hotUpdateCalled.resolve()
+            return []
+          }
+        },
+      },
+    ],
+    server: { middlewareMode: true, ws: false },
+  })
+  onTestFinished(() => server.close())
+
+  server.watcher.emit('change', stateFile)
+
+  await withTimeout(hotUpdateCalled.promise, 'hotUpdate hook was not reached')
+  expect(laterWatchChangeCalled).toBe(true)
+  expect(loggedErrors).toContain(watchChangeError)
+})
+
 async function writeProject(root, files) {
   for (const [relativePath, content] of Object.entries(files)) {
     const filename = path.join(root, relativePath)
