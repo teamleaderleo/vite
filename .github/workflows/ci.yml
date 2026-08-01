@@ -36,7 +36,116 @@ jobs:
           node-version: 24
           cache: pnpm
 
-      - name: Execute reviewed carrier scripts
+      - name: Apply deterministic source repair
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          from textwrap import dedent, indent
+
+          container = Path('packages/vite/src/node/server/pluginContainer.ts')
+          text = container.read_text()
+
+          helper = indent(
+            dedent('''\
+          private async hookParallelWithErrorHandler<
+            H extends AsyncPluginHooks & ParallelPluginHooks,
+          >(
+            hookName: H,
+            context: (plugin: Plugin) => ThisType<FunctionPluginHooks[H]>,
+            args: (plugin: Plugin) => Parameters<FunctionPluginHooks[H]>,
+            onError: (error: Parameters<Logger['error']>[0]) => void,
+            condition?: (plugin: Plugin) => boolean | undefined,
+          ): Promise<void> {
+            const parallelPromises: Promise<void>[] = []
+            const runHook = async (plugin: Plugin) => {
+              const hook = plugin[hookName]
+              const handler: Function = getHookHandler(hook)
+              try {
+                await this.handleHookPromise(
+                  handler.apply(context(plugin), args(plugin)),
+                )
+              } catch (error) {
+                onError(error as Parameters<Logger['error']>[0])
+              }
+            }
+
+            for (const plugin of this.getSortedPlugins(hookName)) {
+              if (condition && !condition(plugin)) continue
+
+              const hook = plugin[hookName]
+              if ((hook as { sequential?: boolean }).sequential) {
+                await Promise.all(parallelPromises)
+                parallelPromises.length = 0
+                await runHook(plugin)
+              } else {
+                parallelPromises.push(runHook(plugin))
+              }
+            }
+            await Promise.all(parallelPromises)
+          }
+
+          '''),
+            '  ',
+          )
+          marker = '  async buildStart(_options?: InputOptions): Promise<void> {\n'
+          if 'hookParallelWithErrorHandler' not in text:
+            text = text.replace(marker, helper + marker, 1)
+
+          class_start = text.index('class EnvironmentPluginContainer')
+          method_start = text.index('  async watchChange(\n', class_start)
+          method_end = text.index('\n  async close(): Promise<void> {', method_start)
+          method = indent(
+            dedent('''\
+          async watchChange(
+            id: string,
+            change: { event: 'create' | 'update' | 'delete' },
+            onError?: (error: Parameters<Logger['error']>[0]) => void,
+          ): Promise<void> {
+            const config = this.environment.getTopLevelConfig()
+            const condition = (plugin: Plugin) =>
+              this.environment.name === 'client' ||
+              config.server.perEnvironmentWatchChangeDuringDev ||
+              plugin.perEnvironmentWatchChangeDuringDev
+
+            if (onError) {
+              await this.hookParallelWithErrorHandler(
+                'watchChange',
+                (plugin) => this._getPluginContext(plugin),
+                () => [id, change],
+                onError,
+                condition,
+              )
+            } else {
+              await this.hookParallel(
+                'watchChange',
+                (plugin) => this._getPluginContext(plugin),
+                () => [id, change],
+                condition,
+              )
+            }
+          }
+          '''),
+            '  ',
+          ).rstrip()
+          text = text[:method_start] + method + text[method_end:]
+          container.write_text(text)
+
+          server = Path('packages/vite/src/node/server/index.ts')
+          text = server.read_text()
+          old = '        environment.pluginContainer.watchChange(file, { event }),\n'
+          new = (
+            '        environment.pluginContainer.watchChange(\n'
+            '          file,\n'
+            '          { event },\n'
+            '          (error) => server.config.logger.error(error),\n'
+            '        ),\n'
+          )
+          if old not in text:
+            raise SystemExit('server watchChange call marker not found')
+          server.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Add adversarial controls
         run: |
           python3 <<'PY'
           from pathlib import Path
@@ -45,30 +154,22 @@ jobs:
           lines = Path(
             '.github/workflows/fieldwork-watchchange-plugin-settlement.yml'
           ).read_text().splitlines()
-
-          def extract(name: str) -> str:
-            start = lines.index(f'      - name: {name}')
-            run = next(
-              index for index in range(start + 1, len(lines))
-              if lines[index] == '        run: |'
-            )
-            body = []
-            for line in lines[run + 1:]:
-              if line.startswith('      - name: '):
-                break
-              body.append(line[10:] if line.startswith('          ') else line)
-            return '\n'.join(body) + '\n'
-
-          for step in (
-            'Apply plugin settlement repair',
-            'Add adversarial controls',
-          ):
-            subprocess.run(
-              extract(step),
-              shell=True,
-              check=True,
-              executable='/bin/bash',
-            )
+          start = lines.index('      - name: Add adversarial controls')
+          run = next(
+            index for index in range(start + 1, len(lines))
+            if lines[index] == '        run: |'
+          )
+          body = []
+          for line in lines[run + 1:]:
+            if line.startswith('      - name: '):
+              break
+            body.append(line[10:] if line.startswith('          ') else line)
+          subprocess.run(
+            '\n'.join(body) + '\n',
+            shell=True,
+            check=True,
+            executable='/bin/bash',
+          )
           PY
 
       - name: Install dependencies
