@@ -1,0 +1,107 @@
+name: Fieldwork Unit 01 settlement runner
+
+on:
+  push:
+    branches:
+      - unit-01/watchchange-settlement-runner-base
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fieldwork-unit-01-settlement-runner
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout canonical source branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: fix/fieldwork-25-watchchange-error-isolation
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Set Node version
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Execute reviewed carrier scripts
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          lines = Path(
+            '.github/workflows/fieldwork-watchchange-plugin-settlement.yml'
+          ).read_text().splitlines()
+
+          def extract(name: str) -> str:
+            start = lines.index(f'      - name: {name}')
+            run = next(
+              index for index in range(start + 1, len(lines))
+              if lines[index] == '        run: |'
+            )
+            body = []
+            for line in lines[run + 1:]:
+              if line.startswith('      - name: '):
+                break
+              body.append(line[10:] if line.startswith('          ') else line)
+            return '\n'.join(body) + '\n'
+
+          for step in (
+            'Apply plugin settlement repair',
+            'Add adversarial controls',
+          ):
+            subprocess.run(
+              extract(step),
+              shell=True,
+              check=True,
+              executable='/bin/bash',
+            )
+          PY
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Format changed source
+        run: |
+          pnpm exec oxfmt --write \
+            packages/vite/src/node/server/index.ts \
+            packages/vite/src/node/server/pluginContainer.ts \
+            packages/vite/src/node/__tests__/server/watchChange-error-isolation.spec.js
+
+      - name: Build Vite
+        run: pnpm run build
+
+      - name: Run focused watchChange tests
+        run: pnpm exec vitest run packages/vite/src/node/__tests__/server/watchChange-error-isolation.spec.js
+
+      - name: Lint changed source
+        run: |
+          pnpm exec eslint \
+            packages/vite/src/node/server/index.ts \
+            packages/vite/src/node/server/pluginContainer.ts \
+            packages/vite/src/node/__tests__/server/watchChange-error-isolation.spec.js
+
+      - name: Commit clean repaired source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rm .github/workflows/fieldwork-watchchange-plugin-settlement.yml
+          git config user.name fieldwork-bot
+          git config user.email fieldwork-bot@users.noreply.github.com
+          git add \
+            packages/vite/src/node/server/index.ts \
+            packages/vite/src/node/server/pluginContainer.ts \
+            packages/vite/src/node/__tests__/server/watchChange-error-isolation.spec.js \
+            .github/workflows/fieldwork-watchchange-plugin-settlement.yml
+          git commit -m "fix(dev): settle watchChange hooks before invalidation"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin HEAD:fix/fieldwork-25-watchchange-error-isolation
