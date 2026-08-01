@@ -1,9 +1,7 @@
 name: Fieldwork watchChange plugin settlement repair
 
 on:
-  push:
-    branches:
-      - fix/fieldwork-25-watchchange-error-isolation
+  pull_request:
 
 permissions:
   contents: write
@@ -14,7 +12,7 @@ concurrency:
 
 jobs:
   repair:
-    if: github.actor == github.repository_owner
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -33,13 +31,13 @@ jobs:
           node-version: 24
           cache: pnpm
 
-      - name: Apply plugin-level settlement repair and controls
+      - name: Apply plugin settlement repair
         run: |
           python3 <<'PY'
           from pathlib import Path
 
-          plugin_container = Path('packages/vite/src/node/server/pluginContainer.ts')
-          text = plugin_container.read_text()
+          container = Path('packages/vite/src/node/server/pluginContainer.ts')
+          text = container.read_text()
           marker = "  async buildStart(_options?: InputOptions): Promise<void> {\n"
           helper = """  private async hookParallelWithErrorHandler<
             H extends AsyncPluginHooks & ParallelPluginHooks,
@@ -47,7 +45,7 @@ jobs:
             hookName: H,
             context: (plugin: Plugin) => ThisType<FunctionPluginHooks[H]>,
             args: (plugin: Plugin) => Parameters<FunctionPluginHooks[H]>,
-            onError: (error: string | Error) => void,
+            onError: (error: Parameters<Logger['error']>[0]) => void,
             condition?: (plugin: Plugin) => boolean | undefined,
           ): Promise<void> {
             const parallelPromises: Promise<void>[] = []
@@ -59,7 +57,7 @@ jobs:
                   handler.apply(context(plugin), args(plugin)),
                 )
               } catch (error) {
-                onError(error as string | Error)
+                onError(error as Parameters<Logger['error']>[0])
               }
             }
 
@@ -84,7 +82,7 @@ jobs:
               raise SystemExit('buildStart marker not found')
             text = text.replace(marker, helper + marker, 1)
 
-          old_watch_change = """  async watchChange(
+          old = """  async watchChange(
             id: string,
             change: { event: 'create' | 'update' | 'delete' },
           ): Promise<void> {
@@ -100,10 +98,10 @@ jobs:
             )
           }
 """
-          new_watch_change = """  async watchChange(
+          new = """  async watchChange(
             id: string,
             change: { event: 'create' | 'update' | 'delete' },
-            onError?: (error: string | Error) => void,
+            onError?: (error: Parameters<Logger['error']>[0]) => void,
           ): Promise<void> {
             const config = this.environment.getTopLevelConfig()
             const condition = (plugin: Plugin) =>
@@ -129,31 +127,32 @@ jobs:
             }
           }
 """
-          if old_watch_change not in text:
+          if old not in text:
             raise SystemExit('watchChange method marker not found')
-          text = text.replace(old_watch_change, new_watch_change, 1)
-          plugin_container.write_text(text)
+          container.write_text(text.replace(old, new, 1))
 
-          server_index = Path('packages/vite/src/node/server/index.ts')
-          text = server_index.read_text()
-          old_call = """        environment.pluginContainer.watchChange(file, { event }),
-"""
-          new_call = """        environment.pluginContainer.watchChange(file, { event }, (error) =>
+          server = Path('packages/vite/src/node/server/index.ts')
+          text = server.read_text()
+          old = "        environment.pluginContainer.watchChange(file, { event }),\n"
+          new = """        environment.pluginContainer.watchChange(file, { event }, (error) =>
           server.config.logger.error(error),
         ),
 """
-          if old_call not in text:
-            raise SystemExit('server watchChange call marker not found')
-          text = text.replace(old_call, new_call, 1)
-          server_index.write_text(text)
+          if old not in text:
+            raise SystemExit('server call marker not found')
+          server.write_text(text.replace(old, new, 1))
+          PY
 
-          test_file = Path(
-            'packages/vite/src/node/__tests__/server/watchChange-error-isolation.spec.js'
-          )
+      - name: Add adversarial controls
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          test_file = Path('packages/vite/src/node/__tests__/server/watchChange-error-isolation.spec.js')
           text = test_file.read_text()
-          test_marker = 'async function writeProject(root, files) {'
+          marker = 'async function writeProject(root, files) {'
           tests = r"""
-test('waits for every watchChange hook and logs every rejection', async () => {
+test('settles every watchChange hook before HMR and preserves barriers', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'vite-watch-change-'))
   onTestFinished(() => rm(root, { recursive: true, force: true }))
 
@@ -164,19 +163,15 @@ test('waits for every watchChange hook and logs every rejection', async () => {
   const slowError = new Error('slow watchChange rejection')
   const slowStarted = promiseWithResolvers()
   const releaseSlow = promiseWithResolvers()
-  const fastErrorLogged = promiseWithResolvers()
+  const fastLogged = promiseWithResolvers()
   const hotUpdateCalled = promiseWithResolvers()
+  const events = []
   const loggedErrors = []
-  let hotUpdateReached = false
-  let hotUpdateSawSlowSettlement = false
-  let slowSettled = false
-
-  onTestFinished(() => releaseSlow.resolve())
 
   const logger = createLogger('silent')
   logger.error = (error) => {
     loggedErrors.push(error)
-    if (error === fastError) fastErrorLogged.resolve()
+    if (error === fastError) fastLogged.resolve()
   }
 
   const server = await createServer({
@@ -189,7 +184,9 @@ test('waits for every watchChange hook and logs every rejection', async () => {
         name: 'fast-watch-change',
         async watchChange(id) {
           if (path.resolve(id) !== stateFile) return
+          events.push('fast:start')
           await slowStarted.promise
+          events.push('fast:error')
           throw fastError
         },
       },
@@ -197,10 +194,26 @@ test('waits for every watchChange hook and logs every rejection', async () => {
         name: 'slow-watch-change',
         async watchChange(id) {
           if (path.resolve(id) !== stateFile) return
+          events.push('slow:start')
           slowStarted.resolve()
           await releaseSlow.promise
-          slowSettled = true
+          events.push('slow:error')
           throw slowError
+        },
+      },
+      {
+        name: 'sequential-watch-change',
+        watchChange: {
+          sequential: true,
+          handler(id) {
+            if (path.resolve(id) === stateFile) events.push('sequential')
+          },
+        },
+      },
+      {
+        name: 'later-watch-change',
+        watchChange(id) {
+          if (path.resolve(id) === stateFile) events.push('later')
         },
       },
       {
@@ -208,8 +221,7 @@ test('waits for every watchChange hook and logs every rejection', async () => {
         hotUpdate({ file }) {
           if (this.environment.name !== 'client') return
           if (path.resolve(file) === stateFile) {
-            hotUpdateReached = true
-            hotUpdateSawSlowSettlement = slowSettled
+            events.push('hmr')
             hotUpdateCalled.resolve()
             return []
           }
@@ -218,19 +230,30 @@ test('waits for every watchChange hook and logs every rejection', async () => {
     ],
     server: { middlewareMode: true, ws: false },
   })
-  onTestFinished(() => server.close())
+  onTestFinished(async () => {
+    releaseSlow.resolve()
+    await server.close()
+  })
 
   server.watcher.emit('change', stateFile)
 
-  await withTimeout(fastErrorLogged.promise, 'fast error was not logged')
+  await withTimeout(fastLogged.promise, 'fast error was not logged')
   await new Promise((resolve) => setImmediate(resolve))
-  expect(hotUpdateReached).toBe(false)
+  expect(events).toEqual(['fast:start', 'slow:start', 'fast:error'])
 
   releaseSlow.resolve()
   await withTimeout(hotUpdateCalled.promise, 'hotUpdate hook was not reached')
 
-  expect(hotUpdateSawSlowSettlement).toBe(true)
   expect(loggedErrors).toEqual([fastError, slowError])
+  expect(events).toEqual([
+    'fast:start',
+    'slow:start',
+    'fast:error',
+    'slow:error',
+    'sequential',
+    'later',
+    'hmr',
+  ])
 })
 
 test('continues later watchChange hooks after a synchronous error', async () => {
@@ -288,97 +311,11 @@ test('continues later watchChange hooks after a synchronous error', async () => 
   expect(loggedErrors).toContain(watchChangeError)
 })
 
-test('preserves sequential watchChange barriers after errors', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'vite-watch-change-'))
-  onTestFinished(() => rm(root, { recursive: true, force: true }))
-
-  const stateFile = path.join(root, 'state.txt')
-  await writeProject(root, { 'state.txt': 'alpha\n' })
-
-  const watchChangeError = new Error('parallel watchChange rejection')
-  const firstStarted = promiseWithResolvers()
-  const releaseFirst = promiseWithResolvers()
-  const hotUpdateCalled = promiseWithResolvers()
-  const events = []
-  const loggedErrors = []
-
-  onTestFinished(() => releaseFirst.resolve())
-
-  const logger = createLogger('silent')
-  logger.error = (error) => loggedErrors.push(error)
-
-  const server = await createServer({
-    root,
-    configFile: false,
-    logLevel: 'silent',
-    customLogger: logger,
-    plugins: [
-      {
-        name: 'first-parallel-watch-change',
-        async watchChange(id) {
-          if (path.resolve(id) !== stateFile) return
-          events.push('first:start')
-          firstStarted.resolve()
-          await releaseFirst.promise
-          events.push('first:error')
-          throw watchChangeError
-        },
-      },
-      {
-        name: 'sequential-watch-change',
-        watchChange: {
-          sequential: true,
-          handler(id) {
-            if (path.resolve(id) === stateFile) events.push('sequential')
-          },
-        },
-      },
-      {
-        name: 'last-parallel-watch-change',
-        watchChange(id) {
-          if (path.resolve(id) === stateFile) events.push('last')
-        },
-      },
-      {
-        name: 'watch-change-observer',
-        hotUpdate({ file }) {
-          if (this.environment.name !== 'client') return
-          if (path.resolve(file) === stateFile) {
-            events.push('hmr')
-            hotUpdateCalled.resolve()
-            return []
-          }
-        },
-      },
-    ],
-    server: { middlewareMode: true, ws: false },
-  })
-  onTestFinished(() => server.close())
-
-  server.watcher.emit('change', stateFile)
-
-  await withTimeout(firstStarted.promise, 'first hook was not reached')
-  await new Promise((resolve) => setImmediate(resolve))
-  expect(events).toEqual(['first:start'])
-
-  releaseFirst.resolve()
-  await withTimeout(hotUpdateCalled.promise, 'hotUpdate hook was not reached')
-
-  expect(loggedErrors).toContain(watchChangeError)
-  expect(events).toEqual([
-    'first:start',
-    'first:error',
-    'sequential',
-    'last',
-    'hmr',
-  ])
-})
-
 """
-          if "waits for every watchChange hook" not in text:
-            if test_marker not in text:
+          if 'settles every watchChange hook before HMR' not in text:
+            if marker not in text:
               raise SystemExit('test helper marker not found')
-            text = text.replace(test_marker, tests + test_marker, 1)
+            text = text.replace(marker, tests + marker, 1)
           test_file.write_text(text)
           PY
 
@@ -419,4 +356,4 @@ test('preserves sequential watchChange barriers after errors', async () => {
             .github/workflows/fieldwork-watchchange-plugin-settlement.yml
           git commit -m "fix(dev): settle watchChange hooks before invalidation"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git push origin HEAD:${GITHUB_REF_NAME}
+          git push origin HEAD:fix/fieldwork-25-watchchange-error-isolation
