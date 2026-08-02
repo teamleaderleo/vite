@@ -43,7 +43,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git show f3e0662a0becd344437c4988103d6082604c1ec6:packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts > packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
+          git show d4779e2f386127b34f0644517a24fc3de9890985:packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts > packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
           set +e
           pnpm test-unit packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts > baseline.log 2>&1
           status=$?
@@ -56,7 +56,7 @@ jobs:
       - name: Check out exact candidate
         uses: actions/checkout@v6
         with:
-          ref: f3e0662a0becd344437c4988103d6082604c1ec6
+          ref: d4779e2f386127b34f0644517a24fc3de9890985
           clean: true
           fetch-depth: 0
 
@@ -64,7 +64,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "f3e0662a0becd344437c4988103d6082604c1ec6"
+          test "$(git rev-parse HEAD)" = "d4779e2f386127b34f0644517a24fc3de9890985"
           test "$(git diff --name-only e6b6b167afa0a80548829d1f24a0712f9194389a...HEAD | sort)" = $'packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts\npackages/vite/src/node/server/pluginContainer.ts'
           test -z "$(git status --porcelain)"
 
