@@ -336,7 +336,7 @@ class EnvironmentPluginContainer<Env extends Environment = Environment> {
   ): Promise<void> {
     const parallelPromises: Promise<void>[] = []
     const runHook = async (plugin: Plugin) => {
-      const hook = plugin[hookName]
+      const hook = plugin[hookName]!
       const handler: Function = getHookHandler(hook)
       try {
         await this.handleHookPromise(
@@ -667,7 +667,7 @@ class EnvironmentPluginContainer<Env extends Environment = Environment> {
     return (
       this.environment.name === 'client' ||
       config.server.perEnvironmentWatchChangeDuringDev ||
-      plugin.perEnvironmentWatchChangeDuringDev
+      plugin.perEnvironmentWatchChangeDuringDev === true
     )
   }
 
@@ -1001,7 +1001,9 @@ class PluginContext
         } catch (err2) {
           this.environment.logger.error(
             colors.red(
-              `Error in error handler:\n${err2.stack || err2.message}\n`,
+              `Error in error handler:\
+${err2.stack || err2.message}\
+`,
             ),
             // print extra newline to separate the two errors
             { error: err2 },
