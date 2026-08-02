@@ -1,7 +1,6 @@
 import { expect, it } from 'vitest'
 import type { UserConfig } from '../../config'
 import { resolveConfig } from '../../config'
-import type { Plugin } from '../../plugin'
 import { DevEnvironment } from '../environment'
 
 it('runs closeBundle when buildEnd fails', async () => {
