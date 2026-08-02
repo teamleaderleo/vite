@@ -13,7 +13,7 @@ jobs:
     if: >-
       github.repository == 'teamleaderleo/vite' &&
       github.head_ref == 'execution/dev-closebundle-after-buildend-failure'
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - name: Check out canonical source branch
@@ -29,18 +29,21 @@ jobs:
           test "$(git rev-parse HEAD)" = "e6b6b167afa0a80548829d1f24a0712f9194389a"
           test -z "$(git status --porcelain)"
 
-      - name: Install toolchain
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+
+      - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 24.15.0
           cache: pnpm
 
-      - name: Enable pnpm
+      - name: Install dependencies
         shell: bash
         run: |
           set -euo pipefail
-          corepack enable
-          corepack prepare pnpm@10.34.5 --activate
           pnpm install --frozen-lockfile
 
       - name: Add regression and prove the baseline defect
