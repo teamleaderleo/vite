@@ -646,20 +646,42 @@ class EnvironmentPluginContainer<Env extends Environment = Environment> {
     this._closed = true
     await Promise.allSettled(Array.from(this._processesing))
     const config = this.environment.getTopLevelConfig()
-    await this.hookParallel(
-      'buildEnd',
-      (plugin) => this._getPluginContext(plugin),
-      () => [],
-      (plugin) =>
-        this.environment.name === 'client' ||
-        config.server.perEnvironmentStartEndDuringDev ||
-        plugin.perEnvironmentStartEndDuringDev,
-    )
-    await this.hookParallel(
-      'closeBundle',
-      (plugin) => this._getPluginContext(plugin),
-      () => [],
-    )
+    let buildEndFailed = false
+    let buildEndError: unknown
+    try {
+      await this.hookParallel(
+        'buildEnd',
+        (plugin) => this._getPluginContext(plugin),
+        () => [],
+        (plugin) =>
+          this.environment.name === 'client' ||
+          config.server.perEnvironmentStartEndDuringDev ||
+          plugin.perEnvironmentStartEndDuringDev,
+      )
+    } catch (error) {
+      buildEndFailed = true
+      buildEndError = error
+    }
+
+    try {
+      await this.hookParallel(
+        'closeBundle',
+        (plugin) => this._getPluginContext(plugin),
+        () => [],
+      )
+    } catch (closeBundleError) {
+      if (buildEndFailed) {
+        throw new AggregateError(
+          [buildEndError, closeBundleError],
+          'buildEnd and closeBundle hooks failed',
+        )
+      }
+      throw closeBundleError
+    }
+
+    if (buildEndFailed) {
+      throw buildEndError
+    }
   }
 }
 
