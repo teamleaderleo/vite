@@ -6,7 +6,7 @@ on:
       - upstream/unit-01-vite-main-e6b6b167
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   baseline-and-candidate:
@@ -39,47 +39,196 @@ jobs:
           set -euo pipefail
           pnpm install --frozen-lockfile
 
-      - name: Prove baseline skips closeBundle
+      - name: Prove baseline close lifecycle defects
         shell: bash
         run: |
           set -euo pipefail
-          git show d4779e2f386127b34f0644517a24fc3de9890985:packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts > packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
+          git show ef590b56365742d25a363af21b0a35580c62708d:packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts > packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
+          grep -F "runs closeBundle when buildEnd fails" packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
+          grep -F "waits for all buildEnd hooks before closeBundle after a failure" packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
+          grep -F "continues sequential lifecycle hooks and retains ordered failures" packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
           set +e
           pnpm test-unit packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts > baseline.log 2>&1
           status=$?
           set -e
           cat baseline.log
           test "$status" -ne 0
-          grep -F "runs closeBundle when buildEnd fails" baseline.log
-          grep -F "retains buildEnd and closeBundle failures" baseline.log
 
-      - name: Check out exact candidate
+      - name: Check out exact repair input
         uses: actions/checkout@v6
         with:
-          ref: d4779e2f386127b34f0644517a24fc3de9890985
+          ref: ef590b56365742d25a363af21b0a35580c62708d
           clean: true
           fetch-depth: 0
 
-      - name: Verify exact two-file fence
+      - name: Verify exact repair input fence
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "d4779e2f386127b34f0644517a24fc3de9890985"
+          test "$(git rev-parse HEAD)" = "ef590b56365742d25a363af21b0a35580c62708d"
           test "$(git diff --name-only e6b6b167afa0a80548829d1f24a0712f9194389a...HEAD | sort)" = $'packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts\npackages/vite/src/node/server/pluginContainer.ts'
           test -z "$(git status --porcelain)"
 
-      - name: Run focused repair controls
+      - name: Apply barrier-safe lifecycle scheduler
         shell: bash
         run: |
           set -euo pipefail
+          python <<'PY'
+          from pathlib import Path
+
+          path = Path('packages/vite/src/node/server/pluginContainer.ts')
+          text = path.read_text()
+
+          helper_anchor = '''    await Promise.all(parallelPromises)
+          }
+
+          async buildStart(_options?: InputOptions): Promise<void> {
+          '''
+          helper_replacement = '''    await Promise.all(parallelPromises)
+          }
+
+          private async hookParallelAndCollectErrors<
+            H extends AsyncPluginHooks & ParallelPluginHooks,
+          >(
+            hookName: H,
+            context: (plugin: Plugin) => ThisType<FunctionPluginHooks[H]>,
+            args: (plugin: Plugin) => Parameters<FunctionPluginHooks[H]>,
+            condition?: (plugin: Plugin) => boolean | undefined,
+          ): Promise<unknown[]> {
+            const errors: Array<{ hookIndex: number; error: unknown }> = []
+            const parallelPromises: Promise<void>[] = []
+            let hookIndex = 0
+
+            const runHook = async (plugin: Plugin, currentHookIndex: number) => {
+              const hook = plugin[hookName]!
+              const handler: Function = getHookHandler(hook)
+              try {
+                await handler.apply(context(plugin), args(plugin))
+              } catch (error) {
+                errors.push({ hookIndex: currentHookIndex, error })
+              }
+            }
+
+            for (const plugin of this.getSortedPlugins(hookName)) {
+              if (condition && !condition(plugin)) continue
+
+              const currentHookIndex = hookIndex++
+              const hook = plugin[hookName]!
+              if ((hook as { sequential?: boolean }).sequential) {
+                await Promise.all(parallelPromises)
+                parallelPromises.length = 0
+                await runHook(plugin, currentHookIndex)
+              } else {
+                parallelPromises.push(runHook(plugin, currentHookIndex))
+              }
+            }
+            await Promise.all(parallelPromises)
+
+            return errors
+              .sort((left, right) => left.hookIndex - right.hookIndex)
+              .map(({ error }) => error)
+          }
+
+          async buildStart(_options?: InputOptions): Promise<void> {
+          '''
+          if text.count(helper_anchor) != 1:
+              raise SystemExit(f'expected one helper anchor, found {text.count(helper_anchor)}')
+          text = text.replace(helper_anchor, helper_replacement, 1)
+
+          close_block = '''    const config = this.environment.getTopLevelConfig()
+            let buildEndFailed = false
+            let buildEndError: unknown
+            try {
+              await this.hookParallel(
+                'buildEnd',
+                (plugin) => this._getPluginContext(plugin),
+                () => [],
+                (plugin) =>
+                  this.environment.name === 'client' ||
+                  config.server.perEnvironmentStartEndDuringDev ||
+                  plugin.perEnvironmentStartEndDuringDev,
+              )
+            } catch (error) {
+              buildEndFailed = true
+              buildEndError = error
+            }
+
+            try {
+              await this.hookParallel(
+                'closeBundle',
+                (plugin) => this._getPluginContext(plugin),
+                () => [],
+              )
+            } catch (closeBundleError) {
+              if (buildEndFailed) {
+                throw new AggregateError(
+                  [buildEndError, closeBundleError],
+                  'buildEnd and closeBundle hooks failed',
+                )
+              }
+              throw closeBundleError
+            }
+
+            if (buildEndFailed) {
+              throw buildEndError
+            }
+          '''
+          close_replacement = '''    const config = this.environment.getTopLevelConfig()
+            const errors = [
+              ...(await this.hookParallelAndCollectErrors(
+                'buildEnd',
+                (plugin) => this._getPluginContext(plugin),
+                () => [],
+                (plugin) =>
+                  this.environment.name === 'client' ||
+                  config.server.perEnvironmentStartEndDuringDev ||
+                  plugin.perEnvironmentStartEndDuringDev,
+              )),
+              ...(await this.hookParallelAndCollectErrors(
+                'closeBundle',
+                (plugin) => this._getPluginContext(plugin),
+                () => [],
+              )),
+            ]
+
+            if (errors.length === 1) {
+              throw errors[0]
+            }
+            if (errors.length > 1) {
+              throw new AggregateError(errors, 'buildEnd or closeBundle hooks failed')
+            }
+          '''
+          if text.count(close_block) != 1:
+              raise SystemExit(f'expected one close block, found {text.count(close_block)}')
+          path.write_text(text.replace(close_block, close_replacement, 1))
+          PY
+
+      - name: Format and run focused controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec oxfmt packages/vite/src/node/server/pluginContainer.ts packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
           pnpm test-unit packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
 
-      - name: Run static and formatting gates
+      - name: Run static and hygiene gates
         shell: bash
         run: |
           set -euo pipefail
           pnpm --filter vite typecheck
           pnpm exec eslint --no-cache --concurrency auto packages/vite/src/node/server/pluginContainer.ts packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
           pnpm exec oxfmt --check packages/vite/src/node/server/pluginContainer.ts packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
-          git diff --check e6b6b167afa0a80548829d1f24a0712f9194389a...HEAD
-          test -z "$(git status --porcelain)"
+          git diff --check
+          test "$(git status --short | cut -c4- | sort)" = $'packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts\npackages/vite/src/node/server/pluginContainer.ts'
+
+      - name: Publish corrected exact two-file source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin repair/dev-closebundle-after-buildend-failure
+          test "$(git rev-parse FETCH_HEAD)" = "ef590b56365742d25a363af21b0a35580c62708d"
+          git config user.name fieldwork-repair-bot
+          git config user.email fieldwork-repair-bot@users.noreply.github.com
+          git add packages/vite/src/node/server/pluginContainer.ts packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
+          test "$(git diff --cached --name-only | sort)" = $'packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts\npackages/vite/src/node/server/pluginContainer.ts'
+          git commit -m "fix(dev): settle close lifecycle hooks before cleanup"
+          git push origin HEAD:repair/dev-closebundle-after-buildend-failure
