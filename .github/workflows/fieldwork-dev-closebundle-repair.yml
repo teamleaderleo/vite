@@ -6,28 +6,21 @@ on:
       - upstream/unit-01-vite-main-e6b6b167
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  repair-and-publish:
+  baseline-and-candidate:
     if: >-
       github.repository == 'teamleaderleo/vite' &&
       github.head_ref == 'execution/dev-closebundle-after-buildend-failure'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Check out canonical source branch
+      - name: Check out exact baseline
         uses: actions/checkout@v6
         with:
-          ref: repair/dev-closebundle-after-buildend-failure
+          ref: e6b6b167afa0a80548829d1f24a0712f9194389a
           fetch-depth: 0
-
-      - name: Guard exact source base
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "e6b6b167afa0a80548829d1f24a0712f9194389a"
-          test -z "$(git status --porcelain)"
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -46,102 +39,11 @@ jobs:
           set -euo pipefail
           pnpm install --frozen-lockfile
 
-      - name: Add regression and prove the baseline defect
+      - name: Prove baseline skips closeBundle
         shell: bash
         run: |
           set -euo pipefail
-          python <<'PY'
-          from pathlib import Path
-
-          path = Path('packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts')
-          path.write_text('''import { expect, it } from 'vitest'
-          import type { UserConfig } from '../../config'
-          import { resolveConfig } from '../../config'
-          import type { Plugin } from '../../plugin'
-          import { DevEnvironment } from '../environment'
-
-          it('runs closeBundle when buildEnd fails', async () => {
-            const events: string[] = []
-            const buildEndError = new Error('buildEnd failed')
-            const environment = await getDevEnvironment({
-              plugins: [
-                {
-                  name: 'failing-build-end',
-                  buildEnd() {
-                    events.push('buildEnd')
-                    throw buildEndError
-                  },
-                },
-                {
-                  name: 'close-bundle-cleanup',
-                  closeBundle() {
-                    events.push('closeBundle')
-                  },
-                },
-              ],
-            })
-
-            await expect(environment.pluginContainer.close()).rejects.toBe(
-              buildEndError,
-            )
-            expect(events).toEqual(['buildEnd', 'closeBundle'])
-          })
-
-          it('retains buildEnd and closeBundle failures', async () => {
-            const events: string[] = []
-            const buildEndError = new Error('buildEnd failed')
-            const closeBundleError = new Error('closeBundle failed')
-            const environment = await getDevEnvironment({
-              plugins: [
-                {
-                  name: 'failing-lifecycle-hooks',
-                  buildEnd() {
-                    events.push('buildEnd')
-                    throw buildEndError
-                  },
-                  closeBundle() {
-                    events.push('closeBundle')
-                    throw closeBundleError
-                  },
-                },
-              ],
-            })
-
-            let closeError: unknown
-            try {
-              await environment.pluginContainer.close()
-            } catch (error) {
-              closeError = error
-            }
-
-            expect(closeError).toBeInstanceOf(AggregateError)
-            expect((closeError as AggregateError).errors).toEqual([
-              buildEndError,
-              closeBundleError,
-            ])
-            expect(events).toEqual(['buildEnd', 'closeBundle'])
-          })
-
-          async function getDevEnvironment(
-            inlineConfig?: UserConfig,
-          ): Promise<DevEnvironment> {
-            const config = await resolveConfig(
-              { configFile: false, ...inlineConfig },
-              'serve',
-            )
-
-            // @ts-expect-error This plugin requires a ViteDevServer instance.
-            config.plugins = config.plugins.filter(
-              (plugin) => !plugin.name.includes('pre-alias'),
-            )
-
-            const environment = new DevEnvironment('client', config, { hot: true })
-            await environment.init()
-            return environment
-          }
-          ''')
-          PY
-
+          git show f3e0662a0becd344437c4988103d6082604c1ec6:packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts > packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
           set +e
           pnpm test-unit packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts > baseline.log 2>&1
           status=$?
@@ -151,92 +53,33 @@ jobs:
           grep -F "runs closeBundle when buildEnd fails" baseline.log
           grep -F "retains buildEnd and closeBundle failures" baseline.log
 
-      - name: Apply bounded close-path repair
+      - name: Check out exact candidate
+        uses: actions/checkout@v6
+        with:
+          ref: f3e0662a0becd344437c4988103d6082604c1ec6
+          clean: true
+          fetch-depth: 0
+
+      - name: Verify exact two-file fence
         shell: bash
         run: |
           set -euo pipefail
-          python <<'PY'
-          from pathlib import Path
+          test "$(git rev-parse HEAD)" = "f3e0662a0becd344437c4988103d6082604c1ec6"
+          test "$(git diff --name-only e6b6b167afa0a80548829d1f24a0712f9194389a...HEAD | sort)" = $'packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts\npackages/vite/src/node/server/pluginContainer.ts'
+          test -z "$(git status --porcelain)"
 
-          path = Path('packages/vite/src/node/server/pluginContainer.ts')
-          text = path.read_text()
-          old = '''    const config = this.environment.getTopLevelConfig()
-              await this.hookParallel(
-                'buildEnd',
-                (plugin) => this._getPluginContext(plugin),
-                () => [],
-                (plugin) =>
-                  this.environment.name === 'client' ||
-                  config.server.perEnvironmentStartEndDuringDev ||
-                  plugin.perEnvironmentStartEndDuringDev,
-              )
-              await this.hookParallel(
-                'closeBundle',
-                (plugin) => this._getPluginContext(plugin),
-                () => [],
-              )
-          '''
-          new = '''    const config = this.environment.getTopLevelConfig()
-              let buildEndFailed = false
-              let buildEndError: unknown
-              try {
-                await this.hookParallel(
-                  'buildEnd',
-                  (plugin) => this._getPluginContext(plugin),
-                  () => [],
-                  (plugin) =>
-                    this.environment.name === 'client' ||
-                    config.server.perEnvironmentStartEndDuringDev ||
-                    plugin.perEnvironmentStartEndDuringDev,
-                )
-              } catch (error) {
-                buildEndFailed = true
-                buildEndError = error
-              }
-
-              try {
-                await this.hookParallel(
-                  'closeBundle',
-                  (plugin) => this._getPluginContext(plugin),
-                  () => [],
-                )
-              } catch (closeBundleError) {
-                if (buildEndFailed) {
-                  throw new AggregateError(
-                    [buildEndError, closeBundleError],
-                    'buildEnd and closeBundle hooks failed',
-                  )
-                }
-                throw closeBundleError
-              }
-
-              if (buildEndFailed) {
-                throw buildEndError
-              }
-          '''
-          if text.count(old) != 1:
-              raise SystemExit(f'expected one close block, found {text.count(old)}')
-          path.write_text(text.replace(old, new))
-          PY
-
-      - name: Format and validate repair
+      - name: Run focused repair controls
         shell: bash
         run: |
           set -euo pipefail
-          pnpm exec oxfmt packages/vite/src/node/server/pluginContainer.ts packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
           pnpm test-unit packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
+
+      - name: Run static and formatting gates
+        shell: bash
+        run: |
+          set -euo pipefail
           pnpm --filter vite typecheck
           pnpm exec eslint --no-cache --concurrency auto packages/vite/src/node/server/pluginContainer.ts packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
-          git diff --check
-          test "$(git status --short | cut -c4- | sort)" = $'packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts\npackages/vite/src/node/server/pluginContainer.ts'
-
-      - name: Commit canonical source repair
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name fieldwork-repair-bot
-          git config user.email fieldwork-repair-bot@users.noreply.github.com
-          git add packages/vite/src/node/server/pluginContainer.ts packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
-          test "$(git diff --cached --name-only | sort)" = $'packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts\npackages/vite/src/node/server/pluginContainer.ts'
-          git commit -m "fix(dev): run closeBundle after buildEnd failure"
-          git push origin HEAD:repair/dev-closebundle-after-buildend-failure
+          pnpm exec oxfmt --check packages/vite/src/node/server/pluginContainer.ts packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
+          git diff --check e6b6b167afa0a80548829d1f24a0712f9194389a...HEAD
+          test -z "$(git status --porcelain)"
