@@ -206,10 +206,7 @@ it('orders parallel failures by invocation order, not rejection timing', async (
   await Promise.resolve()
   await Promise.resolve()
 
-  expect(events).toEqual([
-    'first buildEnd started',
-    'second buildEnd failed',
-  ])
+  expect(events).toEqual(['first buildEnd started', 'second buildEnd failed'])
 
   releaseFirstBuildEnd()
 
