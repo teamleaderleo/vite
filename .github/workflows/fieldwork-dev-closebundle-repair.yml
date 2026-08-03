@@ -33,7 +33,7 @@ jobs:
           node-version: 24.15.0
           cache: pnpm
 
-      - name: Install dependencies
+      - name: Install baseline dependencies
         shell: bash
         run: |
           set -euo pipefail
@@ -89,6 +89,12 @@ jobs:
           test "$(git rev-parse HEAD)" = "ef590b56365742d25a363af21b0a35580c62708d"
           test "$(git diff --name-only e6b6b167afa0a80548829d1f24a0712f9194389a...HEAD | sort)" = $'packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts\npackages/vite/src/node/server/pluginContainer.ts'
           test -z "$(git status --porcelain)"
+
+      - name: Install candidate dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
 
       - name: Apply barrier-safe lifecycle scheduler
         env:
