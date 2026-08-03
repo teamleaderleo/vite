@@ -167,6 +167,72 @@ it('continues sequential lifecycle hooks and retains ordered failures', async ()
   ])
 })
 
+it('orders parallel failures by invocation order, not rejection timing', async () => {
+  const events: string[] = []
+  const firstError = new Error('first buildEnd failed')
+  const secondError = new Error('second buildEnd failed')
+  let releaseFirstBuildEnd!: () => void
+  const firstBuildEndGate = new Promise<void>((resolve) => {
+    releaseFirstBuildEnd = resolve
+  })
+  const environment = await getDevEnvironment({
+    plugins: [
+      {
+        name: 'first-slow-failing-build-end',
+        async buildEnd() {
+          events.push('first buildEnd started')
+          await firstBuildEndGate
+          events.push('first buildEnd failed')
+          throw firstError
+        },
+      },
+      {
+        name: 'second-fast-failing-build-end',
+        buildEnd() {
+          events.push('second buildEnd failed')
+          throw secondError
+        },
+      },
+      {
+        name: 'close-bundle-cleanup',
+        closeBundle() {
+          events.push('closeBundle')
+        },
+      },
+    ],
+  })
+
+  const closePromise = environment.pluginContainer.close()
+  await Promise.resolve()
+  await Promise.resolve()
+
+  expect(events).toEqual([
+    'first buildEnd started',
+    'second buildEnd failed',
+  ])
+
+  releaseFirstBuildEnd()
+
+  let closeError: unknown
+  try {
+    await closePromise
+  } catch (error) {
+    closeError = error
+  }
+
+  expect(closeError).toBeInstanceOf(AggregateError)
+  expect((closeError as AggregateError).errors).toEqual([
+    firstError,
+    secondError,
+  ])
+  expect(events).toEqual([
+    'first buildEnd started',
+    'second buildEnd failed',
+    'first buildEnd failed',
+    'closeBundle',
+  ])
+})
+
 async function getDevEnvironment(
   inlineConfig?: UserConfig,
 ): Promise<DevEnvironment> {
