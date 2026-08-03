@@ -122,7 +122,7 @@ jobs:
           pnpm exec eslint --no-cache --concurrency auto packages/vite/src/node/server/pluginContainer.ts packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
           pnpm exec oxfmt --check packages/vite/src/node/server/pluginContainer.ts packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
           git diff --check
-          test "$(git status --short | cut -c4- | sort)" = $'packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts\npackages/vite/src/node/server/pluginContainer.ts'
+          test "$(git diff --name-only e6b6b167afa0a80548829d1f24a0712f9194389a | sort)" = $'packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts\npackages/vite/src/node/server/pluginContainer.ts'
 
       - name: Publish corrected exact two-file source
         shell: bash
@@ -132,7 +132,8 @@ jobs:
           test "$(git rev-parse FETCH_HEAD)" = "ef590b56365742d25a363af21b0a35580c62708d"
           git config user.name fieldwork-repair-bot
           git config user.email fieldwork-repair-bot@users.noreply.github.com
-          git add packages/vite/src/node/server/pluginContainer.ts packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
-          test "$(git diff --cached --name-only | sort)" = $'packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts\npackages/vite/src/node/server/pluginContainer.ts'
+          git add packages/vite/src/node/server/pluginContainer.ts
+          test "$(git diff --cached --name-only)" = 'packages/vite/src/node/server/pluginContainer.ts'
           git commit -m "fix(dev): settle close lifecycle hooks before cleanup"
+          test "$(git diff --name-only e6b6b167afa0a80548829d1f24a0712f9194389a...HEAD | sort)" = $'packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts\npackages/vite/src/node/server/pluginContainer.ts'
           git push origin HEAD:repair/dev-closebundle-after-buildend-failure
