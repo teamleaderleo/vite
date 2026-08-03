@@ -39,20 +39,41 @@ jobs:
           set -euo pipefail
           pnpm install --frozen-lockfile
 
-      - name: Prove baseline close lifecycle defects
+      - name: Build exact baseline package
         shell: bash
         run: |
           set -euo pipefail
-          git show ef590b56365742d25a363af21b0a35580c62708d:packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts > packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
-          grep -F "runs closeBundle when buildEnd fails" packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
-          grep -F "waits for all buildEnd hooks before closeBundle after a failure" packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
-          grep -F "continues sequential lifecycle hooks and retains ordered failures" packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
+          pnpm --filter vite build
+
+      - name: Prove exact baseline close lifecycle defects
+        shell: bash
+        run: |
+          set -euo pipefail
+          TEST_FILE=packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
+          git show ef590b56365742d25a363af21b0a35580c62708d:"$TEST_FILE" > "$TEST_FILE"
           set +e
-          pnpm test-unit packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts > baseline.log 2>&1
+          pnpm test-unit "$TEST_FILE" --reporter=json --outputFile=baseline.json
           status=$?
           set -e
-          cat baseline.log
           test "$status" -ne 0
+          node <<'NODE'
+          const fs = require('node:fs')
+          const report = JSON.parse(fs.readFileSync('baseline.json', 'utf8'))
+          const failed = report.testResults
+            .flatMap((suite) => suite.assertionResults ?? [])
+            .filter((test) => test.status === 'failed')
+            .map((test) => test.fullName)
+            .sort()
+          const expected = [
+            'continues sequential lifecycle hooks and retains ordered failures',
+            'retains buildEnd and closeBundle failures',
+            'runs closeBundle when buildEnd fails',
+            'waits for all buildEnd hooks before closeBundle after a failure',
+          ].sort()
+          console.log({ failed, expected, numFailedTests: report.numFailedTests })
+          if (report.numFailedTests !== expected.length) process.exit(1)
+          if (JSON.stringify(failed) !== JSON.stringify(expected)) process.exit(1)
+          NODE
 
       - name: Check out exact repair input
         uses: actions/checkout@v6
@@ -83,7 +104,7 @@ jobs:
           }
 
           async buildStart(_options?: InputOptions): Promise<void> {
-          '''
+          '''.replace('          }', '  }').replace('          async', '  async')
           helper_replacement = '''    await Promise.all(parallelPromises)
           }
 
@@ -100,9 +121,9 @@ jobs:
             let hookIndex = 0
 
             const runHook = async (plugin: Plugin, currentHookIndex: number) => {
-              const hook = plugin[hookName]!
-              const handler: Function = getHookHandler(hook)
               try {
+                const hook = plugin[hookName]!
+                const handler: Function = getHookHandler(hook)
                 await handler.apply(context(plugin), args(plugin))
               } catch (error) {
                 errors.push({ hookIndex: currentHookIndex, error })
@@ -130,84 +151,85 @@ jobs:
           }
 
           async buildStart(_options?: InputOptions): Promise<void> {
-          '''
+          '''.replace('          }', '  }').replace('          private', '  private').replace('          async', '  async')
           if text.count(helper_anchor) != 1:
               raise SystemExit(f'expected one helper anchor, found {text.count(helper_anchor)}')
           text = text.replace(helper_anchor, helper_replacement, 1)
 
           close_block = '''    const config = this.environment.getTopLevelConfig()
-            let buildEndFailed = false
-            let buildEndError: unknown
-            try {
-              await this.hookParallel(
-                'buildEnd',
-                (plugin) => this._getPluginContext(plugin),
-                () => [],
-                (plugin) =>
-                  this.environment.name === 'client' ||
-                  config.server.perEnvironmentStartEndDuringDev ||
-                  plugin.perEnvironmentStartEndDuringDev,
-              )
-            } catch (error) {
-              buildEndFailed = true
-              buildEndError = error
-            }
+          let buildEndFailed = false
+          let buildEndError: unknown
+          try {
+            await this.hookParallel(
+              'buildEnd',
+              (plugin) => this._getPluginContext(plugin),
+              () => [],
+              (plugin) =>
+                this.environment.name === 'client' ||
+                config.server.perEnvironmentStartEndDuringDev ||
+                plugin.perEnvironmentStartEndDuringDev,
+            )
+          } catch (error) {
+            buildEndFailed = true
+            buildEndError = error
+          }
 
-            try {
-              await this.hookParallel(
-                'closeBundle',
-                (plugin) => this._getPluginContext(plugin),
-                () => [],
-              )
-            } catch (closeBundleError) {
-              if (buildEndFailed) {
-                throw new AggregateError(
-                  [buildEndError, closeBundleError],
-                  'buildEnd and closeBundle hooks failed',
-                )
-              }
-              throw closeBundleError
-            }
-
+          try {
+            await this.hookParallel(
+              'closeBundle',
+              (plugin) => this._getPluginContext(plugin),
+              () => [],
+            )
+          } catch (closeBundleError) {
             if (buildEndFailed) {
-              throw buildEndError
+              throw new AggregateError(
+                [buildEndError, closeBundleError],
+                'buildEnd and closeBundle hooks failed',
+              )
             }
+            throw closeBundleError
+          }
+
+          if (buildEndFailed) {
+            throw buildEndError
+          }
           '''
           close_replacement = '''    const config = this.environment.getTopLevelConfig()
-            const errors = [
-              ...(await this.hookParallelAndCollectErrors(
-                'buildEnd',
-                (plugin) => this._getPluginContext(plugin),
-                () => [],
-                (plugin) =>
-                  this.environment.name === 'client' ||
-                  config.server.perEnvironmentStartEndDuringDev ||
-                  plugin.perEnvironmentStartEndDuringDev,
-              )),
-              ...(await this.hookParallelAndCollectErrors(
-                'closeBundle',
-                (plugin) => this._getPluginContext(plugin),
-                () => [],
-              )),
-            ]
+          const errors = [
+            ...(await this.hookParallelAndCollectErrors(
+              'buildEnd',
+              (plugin) => this._getPluginContext(plugin),
+              () => [],
+              (plugin) =>
+                this.environment.name === 'client' ||
+                config.server.perEnvironmentStartEndDuringDev ||
+                plugin.perEnvironmentStartEndDuringDev,
+            )),
+            ...(await this.hookParallelAndCollectErrors(
+              'closeBundle',
+              (plugin) => this._getPluginContext(plugin),
+              () => [],
+            )),
+          ]
 
-            if (errors.length === 1) {
-              throw errors[0]
-            }
-            if (errors.length > 1) {
-              throw new AggregateError(errors, 'buildEnd or closeBundle hooks failed')
-            }
+          if (errors.length === 1) {
+            throw errors[0]
+          }
+          if (errors.length > 1) {
+            throw new AggregateError(errors, 'buildEnd or closeBundle hooks failed')
+          }
           '''
           if text.count(close_block) != 1:
               raise SystemExit(f'expected one close block, found {text.count(close_block)}')
           path.write_text(text.replace(close_block, close_replacement, 1))
           PY
 
-      - name: Format and run focused controls
+      - name: Format, build, and run focused controls
         shell: bash
         run: |
           set -euo pipefail
           pnpm exec oxfmt packages/vite/src/node/server/pluginContainer.ts packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
+          pnpm --filter vite build
           pnpm test-unit packages/vite/src/node/server/__tests__/pluginContainer-close.spec.ts
 
       - name: Run static and hygiene gates
