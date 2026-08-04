@@ -325,6 +325,48 @@ class EnvironmentPluginContainer<Env extends Environment = Environment> {
     await Promise.all(parallelPromises)
   }
 
+  private async hookParallelAndCollectErrors<
+    H extends AsyncPluginHooks & ParallelPluginHooks,
+  >(
+    hookName: H,
+    context: (plugin: Plugin) => ThisType<FunctionPluginHooks[H]>,
+    args: (plugin: Plugin) => Parameters<FunctionPluginHooks[H]>,
+    condition?: (plugin: Plugin) => boolean | undefined,
+  ): Promise<unknown[]> {
+    const errors: Array<{ hookIndex: number; error: unknown }> = []
+    const parallelPromises: Promise<void>[] = []
+    let hookIndex = 0
+
+    const runHook = async (plugin: Plugin, currentHookIndex: number) => {
+      try {
+        const hook = plugin[hookName]!
+        const handler: Function = getHookHandler(hook)
+        await handler.apply(context(plugin), args(plugin))
+      } catch (error) {
+        errors.push({ hookIndex: currentHookIndex, error })
+      }
+    }
+
+    for (const plugin of this.getSortedPlugins(hookName)) {
+      if (condition && !condition(plugin)) continue
+
+      const currentHookIndex = hookIndex++
+      const hook = plugin[hookName]!
+      if ((hook as { sequential?: boolean }).sequential) {
+        await Promise.all(parallelPromises)
+        parallelPromises.length = 0
+        await runHook(plugin, currentHookIndex)
+      } else {
+        parallelPromises.push(runHook(plugin, currentHookIndex))
+      }
+    }
+    await Promise.all(parallelPromises)
+
+    return errors
+      .sort((left, right) => left.hookIndex - right.hookIndex)
+      .map(({ error }) => error)
+  }
+
   async buildStart(_options?: InputOptions): Promise<void> {
     if (this._started) {
       if (this._buildStartPromise) {
@@ -646,20 +688,29 @@ class EnvironmentPluginContainer<Env extends Environment = Environment> {
     this._closed = true
     await Promise.allSettled(Array.from(this._processesing))
     const config = this.environment.getTopLevelConfig()
-    await this.hookParallel(
-      'buildEnd',
-      (plugin) => this._getPluginContext(plugin),
-      () => [],
-      (plugin) =>
-        this.environment.name === 'client' ||
-        config.server.perEnvironmentStartEndDuringDev ||
-        plugin.perEnvironmentStartEndDuringDev,
-    )
-    await this.hookParallel(
-      'closeBundle',
-      (plugin) => this._getPluginContext(plugin),
-      () => [],
-    )
+    const errors = [
+      ...(await this.hookParallelAndCollectErrors(
+        'buildEnd',
+        (plugin) => this._getPluginContext(plugin),
+        () => [],
+        (plugin) =>
+          this.environment.name === 'client' ||
+          config.server.perEnvironmentStartEndDuringDev ||
+          plugin.perEnvironmentStartEndDuringDev,
+      )),
+      ...(await this.hookParallelAndCollectErrors(
+        'closeBundle',
+        (plugin) => this._getPluginContext(plugin),
+        () => [],
+      )),
+    ]
+
+    if (errors.length === 1) {
+      throw errors[0]
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, 'buildEnd or closeBundle hooks failed')
+    }
   }
 }
 
