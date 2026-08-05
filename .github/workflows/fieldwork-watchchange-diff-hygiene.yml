@@ -1,0 +1,130 @@
+name: Validate watchChange diff hygiene
+
+on:
+  pull_request:
+    paths:
+      - .github/fieldwork/restore-watchchange-diagnostic.py
+      - .github/workflows/fieldwork-watchchange-diff-hygiene.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: watchchange-diff-hygiene-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SOURCE_BASE: d62b3360ecebdf11c23e99ffeb4b32e77c9a2ec8
+  SOURCE_HEAD: 7a735db6e936f9921199fbda855be09375a272ee
+  SOURCE_BRANCH: candidate/watchchange-error-isolation-clean
+  SERVER_PATH: packages/vite/src/node/server/index.ts
+  CONTAINER_PATH: packages/vite/src/node/server/pluginContainer.ts
+  TEST_PATH: packages/vite/src/node/__tests__/server/watchChange-error-isolation.spec.js
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Check out exact cleanup carrier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify carrier and preserve generator
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          test "$(git merge-base HEAD "$SOURCE_HEAD")" = "$SOURCE_HEAD"
+          expected=$(printf '%s\n' \
+            .github/fieldwork/restore-watchchange-diagnostic.py \
+            .github/workflows/fieldwork-watchchange-diff-hygiene.yml | sort)
+          actual=$(git diff --name-only "$SOURCE_HEAD..HEAD" | sort)
+          test "$actual" = "$expected"
+          git diff --check "$SOURCE_HEAD..HEAD"
+          python -m py_compile .github/fieldwork/restore-watchchange-diagnostic.py
+          cp .github/fieldwork/restore-watchchange-diagnostic.py \
+            "$RUNNER_TEMP/restore-watchchange-diagnostic.py"
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+
+      - name: Install locked dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: Generate exact clean source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$SOURCE_HEAD"
+          mkdir -p receipt
+          python "$RUNNER_TEMP/restore-watchchange-diagnostic.py"
+          expected=$(printf '%s\n' "$SERVER_PATH" "$CONTAINER_PATH" "$TEST_PATH" | sort)
+          actual=$(git diff --name-only "$SOURCE_BASE" | sort)
+          printf '%s\n' "$actual" > receipt/product-files.txt
+          test "$actual" = "$expected"
+          git diff --check "$SOURCE_BASE"
+          git diff "$SOURCE_BASE" -- "$SERVER_PATH" "$CONTAINER_PATH" "$TEST_PATH" > receipt/source.diff
+          {
+            echo "carrier_head=${{ github.event.pull_request.head.sha }}"
+            echo "source_base=$SOURCE_BASE"
+            echo "source_head=$SOURCE_HEAD"
+            echo "node=$(node --version)"
+            echo "pnpm=$(pnpm --version)"
+          } > receipt/identity.txt
+
+      - name: Check focused formatting and lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec oxfmt --check "$SERVER_PATH" "$CONTAINER_PATH" "$TEST_PATH" \
+            2>&1 | tee receipt/format.log
+          pnpm exec eslint --concurrency auto "$SERVER_PATH" "$CONTAINER_PATH" "$TEST_PATH" \
+            2>&1 | tee receipt/lint.log
+
+      - name: Run focused watchChange controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          set -o pipefail
+          pnpm exec vitest run "$TEST_PATH" 2>&1 | tee receipt/focused-tests.log
+
+      - name: Run Vite build and type gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --filter vite run build 2>&1 | tee receipt/vite-build.log
+          pnpm --filter vite run typecheck 2>&1 | tee receipt/vite-types.log
+
+      - name: Publish exact three-file successor
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=$(printf '%s\n' "$SERVER_PATH" "$CONTAINER_PATH" "$TEST_PATH" | sort)
+          actual=$(git diff --name-only "$SOURCE_BASE" | sort)
+          test "$actual" = "$expected"
+          git diff --check "$SOURCE_BASE"
+          git config user.name 'Fieldwork Agent'
+          git config user.email 'fieldwork-agent@users.noreply.github.com'
+          git checkout -B "$SOURCE_BRANCH"
+          git add "$SERVER_PATH" "$CONTAINER_PATH" "$TEST_PATH"
+          git diff --cached --check
+          git commit -m 'fix(dev): continue invalidation after watchChange errors'
+          git push --force-with-lease origin "HEAD:refs/heads/$SOURCE_BRANCH"
+
+      - name: Upload exact receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: watchchange-error-isolation-clean
+          path: receipt/
+          if-no-files-found: warn
