@@ -137,6 +137,58 @@ test('reuses the stable dependency cache across a normal restart', async () => {
   )
 })
 
+test('keeps a warm dependency cache across a normal restart', async () => {
+  root = createRoot()
+  const cacheDir = path.join(root, '.vite-shared')
+  const dep = path.join(root, 'dep.js')
+  fs.writeFileSync(dep, 'export const marker = "warm-restart"\n')
+
+  let optimizerBuilds = 0
+  const server = await createServer({
+    configFile: false,
+    root,
+    cacheDir,
+    logLevel: 'silent',
+    resolve: {
+      alias: {
+        dep,
+      },
+    },
+    optimizeDeps: {
+      noDiscovery: true,
+      include: ['dep'],
+      rolldownOptions: {
+        plugins: [
+          {
+            name: 'test:count-warm-restart-optimizer-builds',
+            buildStart() {
+              optimizerBuilds++
+            },
+          },
+        ],
+      },
+    },
+    server: {
+      middlewareMode: true,
+      ws: false,
+    },
+  })
+  servers.add(server)
+
+  await server.environments.client.depsOptimizer!.init()
+  expect(optimizerBuilds).toBe(1)
+  const before = server.environments.client.depsOptimizer!.metadata.optimized.dep
+
+  await server.restart()
+
+  expect(optimizerBuilds).toBe(1)
+  const after = server.environments.client.depsOptimizer!.metadata.optimized.dep
+  expect(after.file).toBe(before.file)
+  expect(normalizePath(after.file)).toBe(
+    normalizePath(path.join(cacheDir, 'deps', 'dep.js')),
+  )
+})
+
 test('keeps same-config later discovery isolated between live servers', async () => {
   root = createRoot()
   const cacheDir = path.join(root, '.vite-shared')
