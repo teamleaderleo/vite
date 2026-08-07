@@ -53,13 +53,15 @@ test('isolates dependency caches for overlapping dev servers', async () => {
 
   const serverA = await createOptimizedServer(cacheDir, depA)
   const environmentA = serverA.environments.client
-  const infoA = environmentA.depsOptimizer!.metadata.optimized.dep
+  const optimizerA = environmentA.depsOptimizer!
+  const infoA = optimizerA.metadata.optimized.dep
 
   expect(fs.readFileSync(infoA.file, 'utf8')).toContain('from-a')
 
   const serverB = await createOptimizedServer(cacheDir, depB)
   const environmentB = serverB.environments.client
-  const infoB = environmentB.depsOptimizer!.metadata.optimized.dep
+  const optimizerB = environmentB.depsOptimizer!
+  const infoB = optimizerB.metadata.optimized.dep
 
   expect(path.resolve(serverA.config.cacheDir)).toBe(path.resolve(cacheDir))
   expect(path.resolve(serverB.config.cacheDir)).toBe(path.resolve(cacheDir))
@@ -70,6 +72,13 @@ test('isolates dependency caches for overlapping dev servers', async () => {
   expect(infoA.file).not.toBe(infoB.file)
   expect(fs.readFileSync(infoA.file, 'utf8')).toContain('from-a')
   expect(fs.readFileSync(infoB.file, 'utf8')).toContain('from-b')
+
+  const urlA = `/${path.relative(root, infoA.file).split(path.sep).join('/')}`
+  const urlB = `/${path.relative(root, infoB.file).split(path.sep).join('/')}`
+  expect(optimizerA.isOptimizedDepFile(infoA.file)).toBe(true)
+  expect(optimizerA.isOptimizedDepUrl(urlA)).toBe(true)
+  expect(optimizerA.isOptimizedDepFile(infoB.file)).toBe(false)
+  expect(optimizerA.isOptimizedDepUrl(urlB)).toBe(false)
 
   const loadedByA = await environmentA.pluginContainer.load(
     `${infoA.file}?v=${infoA.browserHash}`,
