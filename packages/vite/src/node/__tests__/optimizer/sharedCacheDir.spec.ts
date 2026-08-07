@@ -41,6 +41,7 @@ async function createOptimizedServer(
       include: ['dep'],
     },
     server: {
+      middlewareMode: true,
       ws: false,
     },
   })
@@ -161,7 +162,7 @@ test('keeps same-config later discovery isolated between live servers', async ()
         include: ['dep'],
         noDiscovery: false,
       },
-      server: { ws: false },
+      server: { middlewareMode: true, ws: false },
     })
     servers.add(server)
     const optimizer = server.environments.client.depsOptimizer!
