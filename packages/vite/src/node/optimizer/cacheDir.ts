@@ -49,7 +49,11 @@ export function reserveDepsCacheDir(
   ).cacheDir = isolatedCacheDir
 
   return async () => {
-    await fsp.rm(isolatedCacheDir, { recursive: true, force: true })
+    try {
+      await fsp.rm(isolatedCacheDir, { recursive: true, force: true })
+    } catch {
+      // Best effort. A locked cache file should not make environment.close() fail.
+    }
   }
 }
 
