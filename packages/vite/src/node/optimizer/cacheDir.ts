@@ -5,29 +5,28 @@ import type { Environment } from '../environment'
 import type { DevEnvironment } from '../server/environment'
 import { isSameFilePath, normalizePath } from '../utils'
 
-type DepsCacheRootOwner = {
-  cacheRoot: string
+type DepsCachePrefixOwner = {
+  configuredPrefix: string
   config: WeakRef<ResolvedConfig>
 }
 
-type DepsCacheRootState = {
+type DepsCachePrefixState = {
   configuredRoot: string
-  claimedRoot?: string
-  stableOwner?: DepsCacheRootOwner
-  privateRoot?: string
+  configuredPrefix: string
+  claimedPrefix?: string
+  stableOwner?: DepsCachePrefixOwner
+  privatePrefix?: string
   references: number
 }
 
-const configStates = new WeakMap<ResolvedConfig, DepsCacheRootState>()
-const environmentStates = new WeakMap<DevEnvironment, DepsCacheRootState>()
-const stableOwners: DepsCacheRootOwner[] = []
-let isolatedDepsCacheRootId = 0
+const configStates = new WeakMap<ResolvedConfig, DepsCachePrefixState>()
+const environmentStates = new WeakMap<DevEnvironment, DepsCachePrefixState>()
+const stableOwners: DepsCachePrefixOwner[] = []
+let isolatedDepsCachePrefixId = 0
 
 /**
- * Register a built-in dev optimizer as a cache-owner participant without
- * claiming a live cache path yet. Delaying the claim lets a normal server
- * restart construct its replacement while the old server is still alive,
- * then reuse the stable cache after the old environment closes.
+ * Register a built-in dev optimizer without claiming its live cache path.
+ * This keeps replacement environments lazy during a normal server restart.
  */
 export function registerDepsCacheDir(environment: DevEnvironment): void {
   if (environmentStates.has(environment)) return
@@ -35,8 +34,10 @@ export function registerDepsCacheDir(environment: DevEnvironment): void {
   const config = environment.getTopLevelConfig()
   let state = configStates.get(config)
   if (!state) {
+    const configuredRoot = normalizePath(path.resolve(config.cacheDir))
     state = {
-      configuredRoot: normalizePath(path.resolve(config.cacheDir)),
+      configuredRoot,
+      configuredPrefix: normalizePath(path.resolve(configuredRoot, 'deps')),
       references: 0,
     }
     configStates.set(config, state)
@@ -47,67 +48,73 @@ export function registerDepsCacheDir(environment: DevEnvironment): void {
 }
 
 /**
- * Return the cache root for real optimizer storage. Registered live dev
- * servers claim lazily: the first server keeps the configured root, while an
- * overlapping server receives a private child root for its whole lifetime.
- * Other optimizer callers keep the configured cache behavior.
+ * Backward-compatible registration entry used by DevEnvironment. Registration
+ * itself is lazy; the returned release function is called after environment
+ * shutdown has settled optimizer work and pending requests.
  */
-export function getDepsCacheRoot(environment: Environment): string {
+export function reserveDepsCacheDir(
+  environment: DevEnvironment,
+): () => Promise<void> {
+  registerDepsCacheDir(environment)
+  return () => releaseDepsCacheDir(environment)
+}
+
+/**
+ * Return the live dependency-cache prefix for real optimizer storage. The
+ * first live server keeps `<cacheDir>/deps`; a genuinely overlapping server
+ * receives a sibling `_deps_session_*` prefix at the same directory depth.
+ * Keeping the same depth preserves optimizer asset-relative rewrite behavior.
+ */
+export function getDepsCachePrefix(environment: Environment): string {
   const config = environment.getTopLevelConfig()
   const state = environmentStates.get(environment as DevEnvironment)
-  if (!state) return normalizePath(path.resolve(config.cacheDir))
-  if (state.claimedRoot) return state.claimedRoot
+  if (!state) return getConfiguredDepsCachePrefix(environment)
+  if (state.claimedPrefix) return state.claimedPrefix
 
-  const owner = findStableOwner(state.configuredRoot)
+  const owner = findStableOwner(state.configuredPrefix)
   if (!owner) {
-    const reservation: DepsCacheRootOwner = {
-      cacheRoot: state.configuredRoot,
+    const reservation: DepsCachePrefixOwner = {
+      configuredPrefix: state.configuredPrefix,
       config: new WeakRef(config),
     }
     stableOwners.push(reservation)
     state.stableOwner = reservation
-    state.claimedRoot = state.configuredRoot
-    return state.claimedRoot
+    state.claimedPrefix = state.configuredPrefix
+    return state.claimedPrefix
   }
 
   if (owner.config.deref() === config) {
     state.stableOwner = owner
-    state.claimedRoot = state.configuredRoot
-    return state.claimedRoot
+    state.claimedPrefix = state.configuredPrefix
+    return state.claimedPrefix
   }
 
-  state.privateRoot = state.claimedRoot = normalizePath(
+  state.privatePrefix = state.claimedPrefix = normalizePath(
     path.resolve(
       state.configuredRoot,
-      `_deps_session_${process.pid}_${Date.now().toString(36)}_${isolatedDepsCacheRootId++}`,
+      `_deps_session_${process.pid}_${Date.now().toString(36)}_${isolatedDepsCachePrefixId++}`,
     ),
   )
-  return state.claimedRoot
+  return state.claimedPrefix
 }
 
-/**
- * Return a root already claimed by a live dev optimizer without claiming one
- * merely because a generic path predicate ran. Unregistered optimizer callers
- * retain the configured-root behavior.
- */
-export function getDepsCacheRootForRecognition(
+/** Return an already-claimed prefix without causing a generic path check to claim. */
+export function getDepsCachePrefixForRecognition(
   environment: Environment,
 ): string | undefined {
-  const config = environment.getTopLevelConfig()
   const state = environmentStates.get(environment as DevEnvironment)
-  return state
-    ? state.claimedRoot
-    : normalizePath(path.resolve(config.cacheDir))
+  return state ? state.claimedPrefix : getConfiguredDepsCachePrefix(environment)
 }
 
-export function getConfiguredDepsCacheRoot(environment: Environment): string {
-  return normalizePath(path.resolve(environment.getTopLevelConfig().cacheDir))
+export function getConfiguredDepsCachePrefix(environment: Environment): string {
+  return normalizePath(
+    path.resolve(environment.getTopLevelConfig().cacheDir, 'deps'),
+  )
 }
 
 /**
- * Release one dev environment's participation after its optimizer and pending
- * requests have settled. Server-level ownership remains until the last
- * registered optimizer environment closes.
+ * Release one optimizer environment. Server-level ownership remains until the
+ * last registered optimizer environment closes.
  */
 export async function releaseDepsCacheDir(
   environment: DevEnvironment,
@@ -127,22 +134,33 @@ export async function releaseDepsCacheDir(
     if (index !== -1) stableOwners.splice(index, 1)
   }
 
-  if (state.privateRoot) {
+  if (state.privatePrefix) {
+    const parent = path.dirname(state.privatePrefix)
+    const basename = path.basename(state.privatePrefix)
     try {
-      await fsp.rm(state.privateRoot, { recursive: true, force: true })
+      const entries = await fsp.readdir(parent)
+      await Promise.allSettled(
+        entries
+          .filter((entry) => entry.startsWith(basename))
+          .map((entry) =>
+            fsp.rm(path.resolve(parent, entry), { recursive: true, force: true }),
+          ),
+      )
     } catch {
-      // Best effort. A locked cache file should not make environment.close() fail.
+      // Best effort. Locked cache files should not make environment.close() fail.
     }
   }
 }
 
-function findStableOwner(cacheRoot: string): DepsCacheRootOwner | undefined {
+function findStableOwner(
+  configuredPrefix: string,
+): DepsCachePrefixOwner | undefined {
   for (let i = stableOwners.length - 1; i >= 0; i--) {
     const owner = stableOwners[i]
     if (!owner.config.deref()) {
       stableOwners.splice(i, 1)
       continue
     }
-    if (isSameFilePath(owner.cacheRoot, cacheRoot)) return owner
+    if (isSameFilePath(owner.configuredPrefix, configuredPrefix)) return owner
   }
 }
