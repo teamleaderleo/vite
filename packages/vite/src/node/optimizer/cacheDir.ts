@@ -2,9 +2,15 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import type { ResolvedEnvironmentOptions } from '../config'
 import type { DevEnvironment } from '../server/environment'
+import { isSameFilePath } from '../utils'
 import { getDepsCacheDir } from './index'
 
-const depsCacheDirOwners = new Map<string, WeakRef<DevEnvironment>>()
+type DepsCacheDirOwner = {
+  cacheDir: string
+  environment: WeakRef<DevEnvironment>
+}
+
+const depsCacheDirOwners: DepsCacheDirOwner[] = []
 let isolatedDepsCacheDirId = 0
 
 /**
@@ -19,15 +25,19 @@ export function reserveDepsCacheDir(
   environment: DevEnvironment,
 ): () => Promise<void> {
   const depsCacheDir = getDepsCacheDir(environment)
-  const owner = depsCacheDirOwners.get(depsCacheDir)?.deref()
+  const owner = findDepsCacheDirOwner(depsCacheDir)
 
-  if (!owner || owner === environment) {
-    depsCacheDirOwners.set(depsCacheDir, new WeakRef(environment))
-    return async () => {
-      if (depsCacheDirOwners.get(depsCacheDir)?.deref() === environment) {
-        depsCacheDirOwners.delete(depsCacheDir)
-      }
+  if (!owner) {
+    const reservation: DepsCacheDirOwner = {
+      cacheDir: depsCacheDir,
+      environment: new WeakRef(environment),
     }
+    depsCacheDirOwners.push(reservation)
+    return createReleaseOwner(reservation, environment)
+  }
+
+  if (owner.environment.deref() === environment) {
+    return createReleaseOwner(owner, environment)
   }
 
   const isolatedCacheDir = path.resolve(
@@ -40,5 +50,29 @@ export function reserveDepsCacheDir(
 
   return async () => {
     await fsp.rm(isolatedCacheDir, { recursive: true, force: true })
+  }
+}
+
+function findDepsCacheDirOwner(cacheDir: string): DepsCacheDirOwner | undefined {
+  for (let i = depsCacheDirOwners.length - 1; i >= 0; i--) {
+    const owner = depsCacheDirOwners[i]
+    if (!owner.environment.deref()) {
+      depsCacheDirOwners.splice(i, 1)
+      continue
+    }
+    if (isSameFilePath(owner.cacheDir, cacheDir)) {
+      return owner
+    }
+  }
+}
+
+function createReleaseOwner(
+  reservation: DepsCacheDirOwner,
+  environment: DevEnvironment,
+): () => Promise<void> {
+  return async () => {
+    if (reservation.environment.deref() !== environment) return
+    const index = depsCacheDirOwners.indexOf(reservation)
+    if (index !== -1) depsCacheDirOwners.splice(index, 1)
   }
 }
