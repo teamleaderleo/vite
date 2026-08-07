@@ -65,7 +65,9 @@ test('isolates dependency caches for overlapping dev servers', async () => {
 
   expect(path.resolve(serverA.config.cacheDir)).toBe(path.resolve(cacheDir))
   expect(path.resolve(serverB.config.cacheDir)).toBe(path.resolve(cacheDir))
-  expect(path.resolve(environmentA.config.cacheDir)).toBe(path.resolve(cacheDir))
+  expect(path.resolve(environmentA.config.cacheDir)).toBe(
+    path.resolve(cacheDir),
+  )
   expect(path.resolve(environmentB.config.cacheDir)).not.toBe(
     path.resolve(cacheDir),
   )
