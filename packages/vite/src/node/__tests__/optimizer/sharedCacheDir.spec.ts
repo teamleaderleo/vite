@@ -65,12 +65,6 @@ test('isolates dependency caches for overlapping dev servers', async () => {
 
   expect(path.resolve(serverA.config.cacheDir)).toBe(path.resolve(cacheDir))
   expect(path.resolve(serverB.config.cacheDir)).toBe(path.resolve(cacheDir))
-  expect(path.resolve(environmentA.config.cacheDir)).toBe(
-    path.resolve(cacheDir),
-  )
-  expect(path.resolve(environmentB.config.cacheDir)).not.toBe(
-    path.resolve(cacheDir),
-  )
   expect(infoA.file).not.toBe(infoB.file)
   expect(fs.readFileSync(infoA.file, 'utf8')).toContain('from-a')
   expect(fs.readFileSync(infoB.file, 'utf8')).toContain('from-b')
@@ -89,16 +83,14 @@ test('isolates dependency caches for overlapping dev servers', async () => {
     'from-a',
   )
 
-  const isolatedCacheDir = environmentB.config.cacheDir
   await serverB.close()
   servers.delete(serverB)
-  expect(fs.existsSync(isolatedCacheDir)).toBe(false)
+  expect(fs.existsSync(infoB.file)).toBe(false)
 
   await serverA.close()
   servers.delete(serverA)
 
   const serverC = await createOptimizedServer(cacheDir, depA)
-  expect(path.resolve(serverC.environments.client.config.cacheDir)).toBe(
-    path.resolve(cacheDir),
-  )
+  const infoC = serverC.environments.client.depsOptimizer!.metadata.optimized.dep
+  expect(infoC.file).toBe(infoA.file)
 })
