@@ -53,7 +53,9 @@ export function reserveDepsCacheDir(
   }
 }
 
-function findDepsCacheDirOwner(cacheDir: string): DepsCacheDirOwner | undefined {
+function findDepsCacheDirOwner(
+  cacheDir: string,
+): DepsCacheDirOwner | undefined {
   for (let i = depsCacheDirOwners.length - 1; i >= 0; i--) {
     const owner = depsCacheDirOwners[i]
     if (!owner.environment.deref()) {
