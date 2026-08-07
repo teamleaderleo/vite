@@ -141,7 +141,9 @@ export async function releaseDepsCacheDir(
       const entries = await fsp.readdir(parent)
       await Promise.allSettled(
         entries
-          .filter((entry) => entry.startsWith(basename))
+          .filter(
+            (entry) => entry === basename || entry.startsWith(`${basename}_`),
+          )
           .map((entry) =>
             fsp.rm(path.resolve(parent, entry), { recursive: true, force: true }),
           ),
