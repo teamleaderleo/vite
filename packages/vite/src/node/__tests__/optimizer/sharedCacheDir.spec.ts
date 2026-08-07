@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, expect, test, vi } from 'vitest'
 import type { ViteDevServer } from '../..'
-import { createServer } from '../..'
+import { createServer, normalizePath } from '../..'
 
 const servers = new Set<ViteDevServer>()
 let root: string | undefined
@@ -127,7 +127,9 @@ test('reuses the stable dependency cache across a normal restart', async () => {
 
   const after = server.environments.client.depsOptimizer!.metadata.optimized.dep
   expect(after.file).toBe(before.file)
-  expect(after.file).toBe(path.join(cacheDir, 'deps', 'dep.js'))
+  expect(normalizePath(after.file)).toBe(
+    normalizePath(path.join(cacheDir, 'deps', 'dep.js')),
+  )
   expect(after.file).not.toContain('_deps_session_')
   expect(path.resolve(server.environments.client.config.cacheDir)).toBe(
     path.resolve(cacheDir),
@@ -137,10 +139,7 @@ test('reuses the stable dependency cache across a normal restart', async () => {
 test('keeps same-config later discovery isolated between live servers', async () => {
   root = createRoot()
   const cacheDir = path.join(root, '.vite-shared')
-  writePackage(
-    'common',
-    'export const common = "shared"\n',
-  )
+  writePackage('common', 'export const common = "shared"\n')
   writePackage(
     'dep',
     'import { common } from "common"\nexport const marker = common\n',
