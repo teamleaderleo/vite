@@ -71,6 +71,13 @@ test('isolates dependency caches for overlapping dev servers', async () => {
   expect(fs.readFileSync(infoA.file, 'utf8')).toContain('from-a')
   expect(fs.readFileSync(infoB.file, 'utf8')).toContain('from-b')
 
+  const loadedByA = await environmentA.pluginContainer.load(
+    `${infoA.file}?v=${infoA.browserHash}`,
+  )
+  expect(typeof loadedByA === 'string' ? loadedByA : loadedByA?.code).toContain(
+    'from-a',
+  )
+
   const isolatedCacheDir = environmentB.config.cacheDir
   await serverB.close()
   servers.delete(serverB)
