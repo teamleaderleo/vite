@@ -89,10 +89,11 @@ export function getDepsCachePrefix(environment: Environment): string {
     return state.claimedPrefix
   }
 
+  const sessionId = (isolatedDepsCachePrefixId++).toString(36).padStart(8, '0')
   state.privatePrefix = state.claimedPrefix = normalizePath(
     path.resolve(
       state.configuredRoot,
-      `_deps_session_${process.pid}_${Date.now().toString(36)}_${isolatedDepsCachePrefixId++}`,
+      `_deps_session_${process.pid}_${Date.now().toString(36)}_${sessionId}`,
     ),
   )
   return state.claimedPrefix
