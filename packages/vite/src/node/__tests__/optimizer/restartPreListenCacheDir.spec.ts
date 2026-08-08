@@ -102,7 +102,7 @@ test('keeps the warm stable cache when restart setup transforms a dependency', a
   expect(optimizerBuilds).toBe(buildsBeforeRestart)
 })
 
-test('allocates a fresh private cache on restart while the stable owner stays live', async (ctx) => {
+test('uses a fresh private cache on restart while the stable owner stays live', async (ctx) => {
   const root = createRoot()
   ctx.onTestFinished(() => fs.rmSync(root, { recursive: true, force: true }))
 
