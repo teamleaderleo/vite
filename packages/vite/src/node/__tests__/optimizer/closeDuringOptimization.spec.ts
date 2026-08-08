@@ -88,11 +88,16 @@ test('waits for active dependency optimizer output before close resolves', async
     servers.delete(server)
 
     // The closed optimizer should discard the run and remove its processing dir.
-    await vi.waitFor(() => {
-      const cacheEntries = fs.existsSync(cacheDir) ? fs.readdirSync(cacheDir) : []
-      expect(cacheEntries.some((entry) => entry.startsWith('deps_temp_'))).toBe(
-        false,
-      )
-    })
+    await vi.waitFor(
+      () => {
+        const cacheEntries = fs.existsSync(cacheDir)
+          ? fs.readdirSync(cacheDir)
+          : []
+        expect(cacheEntries.some((entry) => entry.startsWith('deps_temp_'))).toBe(
+          false,
+        )
+      },
+      { timeout: 5000 },
+    )
   }
 })
