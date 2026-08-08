@@ -50,6 +50,47 @@ async function createOptimizedServer(
   return server
 }
 
+async function createMultiEnvironmentOptimizedServer(
+  cacheDir: string,
+  dep: string,
+): Promise<ViteDevServer> {
+  const server = await createServer({
+    configFile: false,
+    root,
+    cacheDir,
+    logLevel: 'silent',
+    resolve: {
+      alias: {
+        dep,
+      },
+    },
+    optimizeDeps: {
+      force: true,
+      noDiscovery: true,
+      include: ['dep'],
+    },
+    environments: {
+      ssr: {
+        optimizeDeps: {
+          force: true,
+          noDiscovery: true,
+          include: ['dep'],
+        },
+      },
+    },
+    server: {
+      middlewareMode: true,
+      ws: false,
+    },
+  })
+  servers.add(server)
+  await Promise.all([
+    server.environments.client.depsOptimizer!.init(),
+    server.environments.ssr.depsOptimizer!.init(),
+  ])
+  return server
+}
+
 function writePackage(name: string, code: string) {
   const dir = path.join(root!, 'node_modules', name)
   fs.mkdirSync(dir, { recursive: true })
@@ -113,6 +154,53 @@ test('isolates dependency caches for overlapping dev servers', async () => {
   const serverC = await createOptimizedServer(cacheDir, depA)
   const infoC = serverC.environments.client.depsOptimizer!.metadata.optimized.dep
   expect(infoC.file).toBe(infoA.file)
+})
+
+test('shares one cache owner prefix across client and ssr environments', async () => {
+  root = createRoot()
+  const cacheDir = path.join(root, '.vite-shared')
+  const depA = path.join(root, 'dep-a.js')
+  const depB = path.join(root, 'dep-b.js')
+  fs.writeFileSync(depA, 'export const marker = "multi-a"\n')
+  fs.writeFileSync(depB, 'export const marker = "multi-b"\n')
+
+  const serverA = await createMultiEnvironmentOptimizedServer(cacheDir, depA)
+  const serverB = await createMultiEnvironmentOptimizedServer(cacheDir, depB)
+
+  const clientA = serverA.environments.client.depsOptimizer!
+  const ssrA = serverA.environments.ssr.depsOptimizer!
+  const clientB = serverB.environments.client.depsOptimizer!
+  const ssrB = serverB.environments.ssr.depsOptimizer!
+
+  const clientInfoA = clientA.metadata.optimized.dep
+  const ssrInfoA = ssrA.metadata.optimized.dep
+  const clientInfoB = clientB.metadata.optimized.dep
+  const ssrInfoB = ssrB.metadata.optimized.dep
+
+  const clientDirA = normalizePath(path.dirname(clientInfoA.file))
+  const ssrDirA = normalizePath(path.dirname(ssrInfoA.file))
+  const clientDirB = normalizePath(path.dirname(clientInfoB.file))
+  const ssrDirB = normalizePath(path.dirname(ssrInfoB.file))
+
+  expect(clientDirA).toBe(normalizePath(path.join(cacheDir, 'deps')))
+  expect(ssrDirA).toBe(normalizePath(path.join(cacheDir, 'deps_ssr')))
+  expect(path.dirname(clientDirB)).toBe(normalizePath(cacheDir))
+  expect(path.basename(clientDirB)).toMatch(/^_deps_session_/)
+  expect(ssrDirB).toBe(`${clientDirB}_ssr`)
+
+  // Recognition remains broad across environment suffixes for one server,
+  // while the whole server is isolated from another live server's prefix.
+  expect(clientB.isOptimizedDepFile(ssrInfoB.file)).toBe(true)
+  expect(clientA.isOptimizedDepFile(clientInfoB.file)).toBe(false)
+  expect(clientA.isOptimizedDepFile(ssrInfoB.file)).toBe(false)
+
+  await serverB.close()
+  servers.delete(serverB)
+  expect(fs.existsSync(clientInfoB.file)).toBe(false)
+  expect(fs.existsSync(ssrInfoB.file)).toBe(false)
+
+  expect(fs.existsSync(clientInfoA.file)).toBe(true)
+  expect(fs.existsSync(ssrInfoA.file)).toBe(true)
 })
 
 test('reuses the stable dependency cache across a normal restart', async () => {
