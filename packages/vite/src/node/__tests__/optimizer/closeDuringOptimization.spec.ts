@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { afterEach, expect, test } from 'vitest'
+import { afterEach, expect, test, vi } from 'vitest'
 import type { ViteDevServer } from '../..'
 import { createServer } from '../..'
 
@@ -34,6 +34,7 @@ test('waits for active dependency optimizer output before close resolves', async
 
   const outputStarted = deferred()
   const releaseOutput = deferred()
+  const outputFinished = deferred()
 
   const server = await createServer({
     configFile: false,
@@ -48,7 +49,7 @@ test('waits for active dependency optimizer output before close resolves', async
     optimizeDeps: {
       force: true,
       include: ['dep'],
-      noDiscovery: false,
+      noDiscovery: true,
       rolldownOptions: {
         plugins: [
           {
@@ -56,7 +57,7 @@ test('waits for active dependency optimizer output before close resolves', async
             async generateBundle() {
               outputStarted.resolve()
               await releaseOutput.promise
-              throw new Error('stop optimizer output after close probe')
+              outputFinished.resolve()
             },
           },
         ],
@@ -81,9 +82,16 @@ test('waits for active dependency optimizer output before close resolves', async
     expect(closedBeforeRelease).toBe(false)
   } finally {
     releaseOutput.resolve()
+    await outputFinished.promise
     await Promise.allSettled([closePromise])
     servers.delete(server)
-    // Let the intentionally stopped background optimizer unwind before cleanup.
-    await delay(50)
+
+    // The closed optimizer should discard the run and remove its processing dir.
+    await vi.waitFor(() => {
+      const cacheEntries = fs.existsSync(cacheDir) ? fs.readdirSync(cacheDir) : []
+      expect(cacheEntries.some((entry) => entry.startsWith('deps_temp_'))).toBe(
+        false,
+      )
+    })
   }
 })
