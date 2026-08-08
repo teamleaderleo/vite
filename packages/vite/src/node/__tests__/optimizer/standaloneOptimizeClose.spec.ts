@@ -16,7 +16,7 @@ test('closes the standalone optimizeDeps scan plugin container', async (ctx) => 
   )
   fs.writeFileSync(path.join(root, 'entry.js'), 'export const marker = true\n')
 
-  let resolveCalls = 0
+  let optionsCalls = 0
   let closeBundleCalls = 0
   const config = await resolveConfig(
     {
@@ -26,8 +26,8 @@ test('closes the standalone optimizeDeps scan plugin container', async (ctx) => 
       plugins: [
         {
           name: 'test:standalone-optimize-container-lifecycle',
-          resolveId() {
-            resolveCalls++
+          options() {
+            optionsCalls++
           },
           closeBundle() {
             closeBundleCalls++
@@ -43,6 +43,6 @@ test('closes the standalone optimizeDeps scan plugin container', async (ctx) => 
 
   await optimizeDeps(config, true)
 
-  expect(resolveCalls).toBeGreaterThan(0)
+  expect(optionsCalls).toBeGreaterThan(0)
   expect(closeBundleCalls).toBe(1)
 })
