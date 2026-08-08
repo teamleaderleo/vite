@@ -49,7 +49,8 @@ test('waits for active dependency optimizer output before close resolves', async
     optimizeDeps: {
       force: true,
       include: ['dep'],
-      noDiscovery: true,
+      noDiscovery: false,
+      holdUntilCrawlEnd: false,
       rolldownOptions: {
         plugins: [
           {
