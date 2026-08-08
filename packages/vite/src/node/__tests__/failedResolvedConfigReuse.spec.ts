@@ -40,6 +40,7 @@ test('does not retain the config marker when HTTPS server creation fails', async
       root: import.meta.dirname,
       logLevel: 'silent',
       server: {
+        // This fails while creating the HTTP/2 server, before watcher allocation.
         https: {
           key: 'not a private key',
           cert: 'not a certificate',
