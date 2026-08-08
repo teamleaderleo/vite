@@ -13,9 +13,12 @@ type DepsCachePrefixOwner = {
 type DepsCachePrefixState = {
   configuredRoot: string
   configuredPrefix: string
+  config: WeakRef<ResolvedConfig>
   claimedPrefix?: string
   stableOwner?: DepsCachePrefixOwner
   privatePrefix?: string
+  restartPredecessor?: WeakRef<DepsCachePrefixState>
+  restartSuccessor?: WeakRef<DepsCachePrefixState>
   references: number
 }
 
@@ -38,6 +41,7 @@ export function registerDepsCacheDir(environment: DevEnvironment): void {
     state = {
       configuredRoot,
       configuredPrefix: normalizePath(path.resolve(configuredRoot, 'deps')),
+      config: new WeakRef(config),
       references: 0,
     }
     configStates.set(config, state)
@@ -45,6 +49,31 @@ export function registerDepsCacheDir(environment: DevEnvironment): void {
 
   state.references++
   environmentStates.set(environment, state)
+}
+
+/**
+ * Link a replacement environment to the previous server generation. Before
+ * the replacement starts listening, supported transforms may need to plan
+ * optimized dependency paths. They can keep using the predecessor's path
+ * without acquiring storage ownership while the predecessor is still live.
+ */
+export function linkDepsCacheDirRestart(
+  environment: DevEnvironment,
+  previousEnvironment: DevEnvironment,
+): void {
+  const state = environmentStates.get(environment)
+  const previousState = environmentStates.get(previousEnvironment)
+  if (
+    !state ||
+    !previousState ||
+    state === previousState ||
+    !isSameFilePath(state.configuredPrefix, previousState.configuredPrefix)
+  ) {
+    return
+  }
+
+  state.restartPredecessor = new WeakRef(previousState)
+  previousState.restartSuccessor = new WeakRef(state)
 }
 
 /**
@@ -60,16 +89,21 @@ export function reserveDepsCacheDir(
 }
 
 /**
- * Return the live dependency-cache prefix for real optimizer storage. The
- * first live server keeps `<cacheDir>/deps`; a genuinely overlapping server
- * receives a sibling `_deps_session_*` prefix at the same directory depth.
- * Keeping the same depth preserves optimizer asset-relative rewrite behavior.
+ * Return the live dependency-cache prefix for optimizer paths and storage. A
+ * restart replacement may temporarily plan against its predecessor's prefix;
+ * normal Vite restart ordering closes the predecessor before optimizer init,
+ * at which point ownership is transferred to the replacement.
  */
 export function getDepsCachePrefix(environment: Environment): string {
   const config = environment.getTopLevelConfig()
   const state = environmentStates.get(environment as DevEnvironment)
   if (!state) return getConfiguredDepsCachePrefix(environment)
   if (state.claimedPrefix) return state.claimedPrefix
+
+  const predecessor = state.restartPredecessor?.deref()
+  if (predecessor?.claimedPrefix) {
+    return predecessor.claimedPrefix
+  }
 
   const owner = findStableOwner(state.configuredPrefix)
   if (!owner) {
@@ -99,12 +133,13 @@ export function getDepsCachePrefix(environment: Environment): string {
   return state.claimedPrefix
 }
 
-/** Return an already-claimed prefix without causing a generic path check to claim. */
+/** Return an already-claimed or restart-planned prefix without generic claiming. */
 export function getDepsCachePrefixForRecognition(
   environment: Environment,
 ): string | undefined {
   const state = environmentStates.get(environment as DevEnvironment)
-  return state ? state.claimedPrefix : getConfiguredDepsCachePrefix(environment)
+  if (!state) return getConfiguredDepsCachePrefix(environment)
+  return state.claimedPrefix ?? state.restartPredecessor?.deref()?.claimedPrefix
 }
 
 export function getConfiguredDepsCachePrefix(environment: Environment): string {
@@ -115,7 +150,9 @@ export function getConfiguredDepsCachePrefix(environment: Environment): string {
 
 /**
  * Release one optimizer environment. Server-level ownership remains until the
- * last registered optimizer environment closes.
+ * last registered optimizer environment closes. During a normal restart, the
+ * last predecessor environment transfers its existing owner slot to the lazy
+ * replacement so warm-cache paths remain stable without overlapping writers.
  */
 export async function releaseDepsCacheDir(
   environment: DevEnvironment,
@@ -129,6 +166,35 @@ export async function releaseDepsCacheDir(
 
   const config = environment.getTopLevelConfig()
   if (configStates.get(config) === state) configStates.delete(config)
+
+  const successor = state.restartSuccessor?.deref()
+  if (
+    successor &&
+    successor.restartPredecessor?.deref() === state &&
+    !successor.claimedPrefix &&
+    state.claimedPrefix
+  ) {
+    successor.claimedPrefix = state.claimedPrefix
+    successor.privatePrefix = state.privatePrefix
+    successor.stableOwner = state.stableOwner
+    successor.restartPredecessor = undefined
+    state.restartSuccessor = undefined
+
+    const successorConfig = successor.config.deref()
+    if (successor.stableOwner && successorConfig) {
+      successor.stableOwner.config = new WeakRef(successorConfig)
+    }
+
+    state.claimedPrefix = undefined
+    state.privatePrefix = undefined
+    state.stableOwner = undefined
+    return
+  }
+
+  if (successor?.restartPredecessor?.deref() === state) {
+    successor.restartPredecessor = undefined
+  }
+  state.restartSuccessor = undefined
 
   if (state.stableOwner) {
     const index = stableOwners.indexOf(state.stableOwner)
