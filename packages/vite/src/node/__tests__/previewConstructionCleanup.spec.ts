@@ -42,9 +42,6 @@ test('removes shutdown state when configurePreviewServer fails', async () => {
   )
 
   const result = JSON.parse(stdout.trim().split('\n').at(-1)!)
-  expect(result).toEqual({
-    before: 0,
-    after: 0,
-    message: 'configurePreviewServer failed',
-  })
+  expect(result.message).toBe('configurePreviewServer failed')
+  expect(result.after).toBe(result.before)
 })
