@@ -75,3 +75,38 @@ test('closes the watcher when initial configureServer fails', async () => {
     if (closeCalls === 0) await originalClose?.()
   }
 })
+
+test('closes the watcher when initial buildStart fails', async () => {
+  let originalClose: (() => Promise<void>) | undefined
+  let closeCalls = 0
+
+  try {
+    await expect(
+      createServer({
+        configFile: false,
+        root: import.meta.dirname,
+        logLevel: 'silent',
+        server: { middlewareMode: true, ws: false },
+        plugins: [
+          {
+            name: 'test:fail-initial-build-start',
+            configureServer(candidate) {
+              originalClose = candidate.watcher.close.bind(candidate.watcher)
+              candidate.watcher.close = async () => {
+                closeCalls++
+                await originalClose!()
+              }
+            },
+            buildStart() {
+              throw new Error('initial buildStart failed')
+            },
+          },
+        ],
+      }),
+    ).rejects.toThrow('initial buildStart failed')
+
+    expect(closeCalls).toBe(1)
+  } finally {
+    if (closeCalls === 0) await originalClose?.()
+  }
+})
