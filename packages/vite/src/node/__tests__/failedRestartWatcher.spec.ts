@@ -157,3 +157,72 @@ test('closes the watcher when environment init fails', async () => {
     if (closeCalls === 0) await originalClose?.()
   }
 })
+
+test('closes an initialized environment when a sibling environment init fails', async () => {
+  let releaseFailingInit!: () => void
+  const clientInitialized = new Promise<void>((resolve) => {
+    releaseFailingInit = resolve
+  })
+  let clientEnvironment: DevEnvironment | undefined
+  let watcherClose: (() => Promise<void>) | undefined
+  let clientCloseCalls = 0
+
+  class TrackingClientEnvironment extends DevEnvironment {
+    override async init(options?: Parameters<DevEnvironment['init']>[0]) {
+      await super.init(options)
+      watcherClose = options?.watcher?.close.bind(options.watcher)
+      releaseFailingInit()
+    }
+
+    override async close() {
+      clientCloseCalls++
+      await super.close()
+    }
+  }
+
+  class FailingSiblingEnvironment extends DevEnvironment {
+    override async init() {
+      await clientInitialized
+      throw new Error('sibling environment init failed')
+    }
+  }
+
+  try {
+    await expect(
+      createServer({
+        configFile: false,
+        root: import.meta.dirname,
+        logLevel: 'silent',
+        server: { middlewareMode: true, ws: false },
+        environments: {
+          client: {
+            dev: {
+              createEnvironment(name, config, context) {
+                clientEnvironment = new TrackingClientEnvironment(name, config, {
+                  hot: true,
+                  transport: context.ws,
+                  disableFetchModule: true,
+                })
+                return clientEnvironment
+              },
+            },
+          },
+          broken: {
+            dev: {
+              createEnvironment(name, config) {
+                return new FailingSiblingEnvironment(name, config, {
+                  hot: false,
+                })
+              },
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow('sibling environment init failed')
+
+    expect(clientCloseCalls).toBe(1)
+  } finally {
+    if (clientCloseCalls === 0) await clientEnvironment?.close()
+    await watcherClose?.()
+  }
+})
