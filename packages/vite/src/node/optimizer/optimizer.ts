@@ -527,7 +527,7 @@ export function createDepsOptimizer(
           if (needsInteropMismatch.length > 0) {
             logger.warn(
               `Mixed ESM and CJS detected in ${colors.yellow(
-                needsInteropMismatch.join(', ')
+                needsInteropMismatch.join(', '),
               )}, add ${
                 needsInteropMismatch.length === 1 ? 'it' : 'them'
               } to optimizeDeps.needsInterop to speed up cold start`,
