@@ -102,7 +102,7 @@ test('keeps the warm stable cache when restart setup transforms a dependency', a
   expect(optimizerBuilds).toBe(buildsBeforeRestart)
 })
 
-test('keeps a private warm cache across restart while the stable owner stays live', async (ctx) => {
+test('allocates a fresh private cache on restart while the stable owner stays live', async (ctx) => {
   const root = createRoot()
   ctx.onTestFinished(() => fs.rmSync(root, { recursive: true, force: true }))
 
@@ -207,8 +207,9 @@ test('keeps a private warm cache across restart while the stable owner stays liv
     privateServer.environments.client.depsOptimizer!.metadata.optimized[
       'private-dep'
     ]
-  expect(after.file).toBe(before.file)
+  expect(after.file).not.toBe(before.file)
   expect(after.file).toContain('_deps_session_')
-  expect(optimizerBuilds).toBe(buildsBeforeRestart)
+  expect(optimizerBuilds).toBeGreaterThan(buildsBeforeRestart)
+  expect(fs.existsSync(before.file)).toBe(false)
   expect(fs.existsSync(stableInfo.file)).toBe(true)
 })
