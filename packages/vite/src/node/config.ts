@@ -1429,17 +1429,20 @@ async function setOptimizeDepsPluginNames(resolvedConfig: ResolvedConfig) {
 }
 
 function applyDepOptimizationOptionCompat(resolvedConfig: ResolvedConfig) {
-  if (
-    resolvedConfig.optimizeDeps.esbuildOptions?.plugins &&
-    resolvedConfig.optimizeDeps.esbuildOptions.plugins.length > 0
-  ) {
-    resolvedConfig.optimizeDeps.rolldownOptions ??= {}
-    resolvedConfig.optimizeDeps.rolldownOptions.plugins ||= []
-    ;(resolvedConfig.optimizeDeps.rolldownOptions.plugins as any[]).push(
-      ...resolvedConfig.optimizeDeps.esbuildOptions.plugins.map((plugin) =>
-        convertEsbuildPluginToRolldownPlugin(plugin),
-      ),
-    )
+  for (const environment of Object.values(resolvedConfig.environments)) {
+    const optimizeDeps = environment.optimizeDeps
+    if (
+      optimizeDeps.esbuildOptions?.plugins &&
+      optimizeDeps.esbuildOptions.plugins.length > 0
+    ) {
+      optimizeDeps.rolldownOptions ??= {}
+      optimizeDeps.rolldownOptions.plugins ||= []
+      ;(optimizeDeps.rolldownOptions.plugins as any[]).push(
+        ...optimizeDeps.esbuildOptions.plugins.map((plugin) =>
+          convertEsbuildPluginToRolldownPlugin(plugin),
+        ),
+      )
+    }
   }
 }
 
