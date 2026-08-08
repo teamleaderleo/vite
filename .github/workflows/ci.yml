@@ -204,3 +204,140 @@ jobs:
         run: |
           bash <(curl https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
           ./actionlint -color -shellcheck=""
+
+  fieldwork-construction-cleanup:
+    name: Fieldwork construction cleanup
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Set node version to 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: "pnpm"
+
+      - name: Install deps
+        run: pnpm install
+
+      - name: Apply construction cleanup candidate
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('packages/vite/src/node/server/index.ts')
+          source = path.read_text()
+
+          old_init = '''  const environments: Record<string, DevEnvironment> = {}
+
+          await Promise.all(
+            Object.entries(config.environments).map(
+              async ([name, environmentOptions]) => {
+                const environment = await environmentOptions.dev.createEnvironment(
+                  name,
+                  config,
+                  {
+                    ws,
+                  },
+                )
+                environments[name] = environment
+
+                const previousInstance =
+                  options.previousEnvironments?.[environment.name]
+                await environment.init({ watcher, previousInstance })
+              },
+            ),
+          )
+          '''
+          old_init = '\n'.join(line[10:] if line.startswith('          ') else line for line in old_init.splitlines()) + '\n'
+          new_init = '''  const closeHttpServer = createServerCloseFn(httpServer)
+          const environments: Record<string, DevEnvironment> = {}
+
+          try {
+            await Promise.all(
+              Object.entries(config.environments).map(
+                async ([name, environmentOptions]) => {
+                  const environment = await environmentOptions.dev.createEnvironment(
+                    name,
+                    config,
+                    {
+                      ws,
+                    },
+                  )
+                  environments[name] = environment
+
+                  const previousInstance =
+                    options.previousEnvironments?.[environment.name]
+                  await environment.init({ watcher, previousInstance })
+                },
+              ),
+            )
+          } catch (error) {
+            usedConfigs.delete(config)
+            await Promise.allSettled([
+              watcher.close(),
+              ws.close(),
+              Promise.allSettled(
+                Object.values(environments).map((environment) =>
+                  Promise.resolve().then(() => environment.close()),
+                ),
+              ),
+              closeHttpServer(),
+            ])
+            throw error
+          }
+          '''
+          new_init = '\n'.join(line[10:] if line.startswith('          ') else line for line in new_init.splitlines()) + '\n'
+          if old_init not in source:
+              raise SystemExit('environment init block not found')
+          source = source.replace(old_init, new_init, 1)
+
+          duplicate_close = '  const closeHttpServer = createServerCloseFn(httpServer)\n\n'
+          first = source.find(duplicate_close)
+          second = source.find(duplicate_close, first + len(duplicate_close))
+          if first == -1 or second == -1:
+              raise SystemExit('expected duplicate closeHttpServer declaration')
+          source = source[:second] + source[second + len(duplicate_close):]
+
+          tail_start = '''  if (!middlewareMode) {
+            setupSIGTERMListener(closeServerAndExit)
+          }
+          '''
+          tail_start = '\n'.join(line[10:] if line.startswith('          ') else line for line in tail_start.splitlines()) + '\n'
+          if tail_start not in source:
+              raise SystemExit('post-server tail start not found')
+          source = source.replace(tail_start, '  try {\n' + tail_start, 1)
+
+          tail_end = '  return server\n}\n\nasync function startServer'
+          replacement_end = '''    return server
+            } catch (error) {
+              usedConfigs.delete(config)
+              await server.close()
+              throw error
+            }
+          }
+
+          async function startServer'''
+          replacement_end = '\n'.join(line[10:] if line.startswith('          ') else line for line in replacement_end.splitlines())
+          if tail_end not in source:
+              raise SystemExit('post-server tail end not found')
+          source = source.replace(tail_end, replacement_end, 1)
+
+          path.write_text(source)
+          PY
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Run focused construction regressions
+        run: >-
+          pnpm test-unit
+          packages/vite/src/node/__tests__/failedRestartWatcher.spec.ts
+          packages/vite/src/node/__tests__/failedResolvedConfigReuse.spec.ts
