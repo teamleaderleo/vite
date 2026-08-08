@@ -16,7 +16,10 @@ import {
   createDepsOptimizer,
   createExplicitDepsOptimizer,
 } from '../optimizer/optimizer'
-import { reserveDepsCacheDir } from '../optimizer/cacheDir'
+import {
+  linkDepsCacheDirRestart,
+  reserveDepsCacheDir,
+} from '../optimizer/cacheDir'
 import { ERR_OUTDATED_OPTIMIZED_DEP } from '../../shared/constants'
 import { cleanUrl, promiseWithResolvers } from '../../shared/utils'
 import type { ViteDevServer } from '../server'
@@ -220,6 +223,9 @@ export class DevEnvironment extends BaseEnvironment {
       return
     }
     this._initiated = true
+    if (options?.previousInstance) {
+      linkDepsCacheDirRestart(this, options.previousInstance)
+    }
     this._pluginContainer = await createEnvironmentPluginContainer(
       this,
       this.config.plugins,
