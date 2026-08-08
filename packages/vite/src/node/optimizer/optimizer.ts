@@ -159,12 +159,34 @@ export function createDepsOptimizer(
     if (initState !== 'idle') return
     initState = 'initializing'
 
+    const preInitDiscovered = metadata.discovered
     const cachedMetadata = await loadCachedDepOptimizationMetadata(environment)
 
     firstRunCalled = !!cachedMetadata
 
     metadata = depsOptimizer.metadata =
       cachedMetadata || initDepsOptimizerMetadata(environment, sessionTimestamp)
+
+    let preInitDepsNeedOptimization = false
+    if (cachedMetadata) {
+      for (const [id, depInfo] of Object.entries(preInitDiscovered)) {
+        if (cachedMetadata.optimized[id]) continue
+
+        addOptimizedDepInfo(cachedMetadata, 'discovered', depInfo)
+        newDepsDiscovered = true
+        preInitDepsNeedOptimization = true
+      }
+
+      // Requests for deps already satisfied by the warm cache may have captured
+      // the pre-init processing promise before cached metadata was adopted.
+      if (
+        !preInitDepsNeedOptimization &&
+        Object.keys(preInitDiscovered).length > 0
+      ) {
+        depOptimizationProcessing.resolve()
+        resolveEnqueuedProcessingPromises()
+      }
+    }
 
     if (!cachedMetadata) {
       waitingForCrawlEnd = true
@@ -188,6 +210,15 @@ export function createDepsOptimizer(
           ...depInfo,
           processing: depOptimizationProcessing.promise,
         })
+        newDepsDiscovered = true
+      }
+
+      // A dependency may be discovered between createServer() and optimizer init.
+      // Keep it even when the cold-start scanner doesn't visit that module.
+      for (const [id, depInfo] of Object.entries(preInitDiscovered)) {
+        if (metadata.discovered[id]) continue
+
+        addOptimizedDepInfo(metadata, 'discovered', depInfo)
         newDepsDiscovered = true
       }
 
@@ -284,6 +315,10 @@ export function createDepsOptimizer(
       }
     }
     initState = 'initialized'
+
+    if (preInitDepsNeedOptimization) {
+      debouncedProcessing(0)
+    }
   }
 
   function startNextDiscoveredBatch() {
