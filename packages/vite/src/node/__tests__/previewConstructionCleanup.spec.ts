@@ -4,11 +4,12 @@ import { expect, test } from 'vitest'
 
 const execFileAsync = promisify(execFile)
 
-test('removes shutdown state when configurePreviewServer fails', async () => {
+async function runFailedPreview(stage: 'hook' | 'post-hook') {
   const viteUrl = new URL('../../../dist/node/index.js', import.meta.url).href
   const script = `
     import { preview } from ${JSON.stringify(viteUrl)}
 
+    const stage = ${JSON.stringify(stage)}
     const before = process.listenerCount('SIGTERM')
     let message = ''
     try {
@@ -20,7 +21,12 @@ test('removes shutdown state when configurePreviewServer fails', async () => {
         plugins: [{
           name: 'test:fail-configure-preview-server',
           configurePreviewServer() {
-            throw new Error('configurePreviewServer failed')
+            if (stage === 'hook') {
+              throw new Error('configurePreviewServer failed')
+            }
+            return () => {
+              throw new Error('configurePreviewServer post hook failed')
+            }
           },
         }],
       })
@@ -41,7 +47,17 @@ test('removes shutdown state when configurePreviewServer fails', async () => {
     },
   )
 
-  const result = JSON.parse(stdout.trim().split('\n').at(-1)!)
+  return JSON.parse(stdout.trim().split('\n').at(-1)!)
+}
+
+test('removes shutdown state when configurePreviewServer fails', async () => {
+  const result = await runFailedPreview('hook')
   expect(result.message).toBe('configurePreviewServer failed')
+  expect(result.after).toBe(result.before)
+})
+
+test('removes shutdown state when a configurePreviewServer post hook fails', async () => {
+  const result = await runFailedPreview('post-hook')
+  expect(result.message).toBe('configurePreviewServer post hook failed')
   expect(result.after).toBe(result.before)
 })
