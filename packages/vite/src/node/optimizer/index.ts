@@ -297,29 +297,33 @@ export async function optimizeDeps(
   const environment = new ScanEnvironment('client', config)
   await environment.init()
 
-  const cachedMetadata = await loadCachedDepOptimizationMetadata(
-    environment,
-    force,
-    asCommand,
-  )
-  if (cachedMetadata) {
-    return cachedMetadata
+  try {
+    const cachedMetadata = await loadCachedDepOptimizationMetadata(
+      environment,
+      force,
+      asCommand,
+    )
+    if (cachedMetadata) {
+      return cachedMetadata
+    }
+
+    const deps = await discoverProjectDependencies(environment).result
+
+    await addManuallyIncludedOptimizeDeps(environment, deps)
+
+    const depsString = depsLogString(Object.keys(deps))
+    log?.(colors.green(`Optimizing dependencies:\n  ${depsString}`))
+
+    const depsInfo = toDiscoveredDependencies(environment, deps)
+
+    const result = await runOptimizeDeps(environment, depsInfo).result
+
+    await result.commit()
+
+    return result.metadata
+  } finally {
+    await environment.pluginContainer.close()
   }
-
-  const deps = await discoverProjectDependencies(environment).result
-
-  await addManuallyIncludedOptimizeDeps(environment, deps)
-
-  const depsString = depsLogString(Object.keys(deps))
-  log?.(colors.green(`Optimizing dependencies:\n  ${depsString}`))
-
-  const depsInfo = toDiscoveredDependencies(environment, deps)
-
-  const result = await runOptimizeDeps(environment, depsInfo).result
-
-  await result.commit()
-
-  return result.metadata
 }
 
 export async function optimizeExplicitEnvironmentDeps(
