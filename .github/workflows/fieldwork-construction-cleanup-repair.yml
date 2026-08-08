@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - experiment/fieldwork-662-construction-cleanup-repair
+  pull_request:
   workflow_dispatch:
 
 permissions:
