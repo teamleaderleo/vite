@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'vitest'
 import type { ViteDevServer } from '..'
-import { createServer } from '..'
+import { DevEnvironment, createServer } from '..'
 
 let server: ViteDevServer | undefined
 
@@ -104,6 +104,53 @@ test('closes the watcher when initial buildStart fails', async () => {
         ],
       }),
     ).rejects.toThrow('initial buildStart failed')
+
+    expect(closeCalls).toBe(1)
+  } finally {
+    if (closeCalls === 0) await originalClose?.()
+  }
+})
+
+test('closes the watcher when environment init fails', async () => {
+  let originalClose: (() => Promise<void>) | undefined
+  let closeCalls = 0
+
+  class FailingInitEnvironment extends DevEnvironment {
+    override async init(options?: Parameters<DevEnvironment['init']>[0]) {
+      const watcher = options?.watcher
+      if (!watcher) throw new Error('missing watcher')
+
+      originalClose = watcher.close.bind(watcher)
+      watcher.close = async () => {
+        closeCalls++
+        await originalClose!()
+      }
+      throw new Error('environment init failed')
+    }
+  }
+
+  try {
+    await expect(
+      createServer({
+        configFile: false,
+        root: import.meta.dirname,
+        logLevel: 'silent',
+        server: { middlewareMode: true, ws: false },
+        environments: {
+          client: {
+            dev: {
+              createEnvironment(name, config, context) {
+                return new FailingInitEnvironment(name, config, {
+                  hot: true,
+                  transport: context.ws,
+                  disableFetchModule: true,
+                })
+              },
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow('environment init failed')
 
     expect(closeCalls).toBe(1)
   } finally {
