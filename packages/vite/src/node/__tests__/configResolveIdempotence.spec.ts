@@ -27,3 +27,25 @@ test('does not duplicate optimizer plugins when resolving the same inline config
     optimizerPlugin.name,
   ])
 })
+
+test('does not accumulate converted esbuild plugins across repeated config resolution', async () => {
+  const esbuildPlugin = {
+    name: 'test:esbuild-compat-idempotence',
+    setup() {},
+  }
+  const inlineConfig: InlineConfig = {
+    configFile: false,
+    logLevel: 'silent',
+    optimizeDeps: {
+      esbuildOptions: {
+        plugins: [esbuildPlugin],
+      },
+    },
+  }
+
+  const first = await resolveConfig(inlineConfig, 'serve')
+  const second = await resolveConfig(inlineConfig, 'serve')
+
+  expect(first.environments.client.optimizeDepsPluginNames).toHaveLength(1)
+  expect(second.environments.client.optimizeDepsPluginNames).toHaveLength(1)
+})
