@@ -13,12 +13,10 @@ type DepsCachePrefixOwner = {
 type DepsCachePrefixState = {
   configuredRoot: string
   configuredPrefix: string
-  config: WeakRef<ResolvedConfig>
   claimedPrefix?: string
   stableOwner?: DepsCachePrefixOwner
   privatePrefix?: string
   restartPredecessor?: WeakRef<DepsCachePrefixState>
-  restartSuccessor?: WeakRef<DepsCachePrefixState>
   references: number
 }
 
@@ -41,7 +39,6 @@ export function registerDepsCacheDir(environment: DevEnvironment): void {
     state = {
       configuredRoot,
       configuredPrefix: normalizePath(path.resolve(configuredRoot, 'deps')),
-      config: new WeakRef(config),
       references: 0,
     }
     configStates.set(config, state)
@@ -52,10 +49,9 @@ export function registerDepsCacheDir(environment: DevEnvironment): void {
 }
 
 /**
- * Link a replacement environment to the previous server generation. Before
- * the replacement starts listening, supported transforms may need to plan
- * optimized dependency paths. They can keep using the predecessor's path
- * without acquiring storage ownership while the predecessor is still live.
+ * Link a replacement environment to the previous server generation. A
+ * replacement may be transformed before the previous server closes, but Vite
+ * does not initialize its dependency optimizer until the later listen phase.
  */
 export function linkDepsCacheDirRestart(
   environment: DevEnvironment,
@@ -73,7 +69,6 @@ export function linkDepsCacheDirRestart(
   }
 
   state.restartPredecessor = new WeakRef(previousState)
-  previousState.restartSuccessor = new WeakRef(state)
 }
 
 /**
@@ -89,10 +84,12 @@ export function reserveDepsCacheDir(
 }
 
 /**
- * Return the live dependency-cache prefix for optimizer paths and storage. A
- * restart replacement may temporarily plan against its predecessor's prefix;
- * normal Vite restart ordering closes the predecessor before optimizer init,
- * at which point ownership is transferred to the replacement.
+ * Return the live dependency-cache prefix for optimizer paths and storage.
+ * During restart setup, a replacement whose predecessor owns the configured
+ * stable prefix may plan paths against that prefix without claiming it. Normal
+ * restart ordering closes the predecessor before optimizer init, so the later
+ * storage call claims the now-free stable prefix. Private predecessors are not
+ * inherited because doing so safely would require server-adoption state.
  */
 export function getDepsCachePrefix(environment: Environment): string {
   const config = environment.getTopLevelConfig()
@@ -101,7 +98,10 @@ export function getDepsCachePrefix(environment: Environment): string {
   if (state.claimedPrefix) return state.claimedPrefix
 
   const predecessor = state.restartPredecessor?.deref()
-  if (predecessor?.claimedPrefix) {
+  if (
+    predecessor?.claimedPrefix &&
+    isSameFilePath(predecessor.claimedPrefix, predecessor.configuredPrefix)
+  ) {
     return predecessor.claimedPrefix
   }
 
@@ -133,13 +133,21 @@ export function getDepsCachePrefix(environment: Environment): string {
   return state.claimedPrefix
 }
 
-/** Return an already-claimed or restart-planned prefix without generic claiming. */
+/** Return an already-claimed or stable-restart-planned prefix without generic claiming. */
 export function getDepsCachePrefixForRecognition(
   environment: Environment,
 ): string | undefined {
   const state = environmentStates.get(environment as DevEnvironment)
   if (!state) return getConfiguredDepsCachePrefix(environment)
-  return state.claimedPrefix ?? state.restartPredecessor?.deref()?.claimedPrefix
+  if (state.claimedPrefix) return state.claimedPrefix
+
+  const predecessor = state.restartPredecessor?.deref()
+  if (
+    predecessor?.claimedPrefix &&
+    isSameFilePath(predecessor.claimedPrefix, predecessor.configuredPrefix)
+  ) {
+    return predecessor.claimedPrefix
+  }
 }
 
 export function getConfiguredDepsCachePrefix(environment: Environment): string {
@@ -150,9 +158,7 @@ export function getConfiguredDepsCachePrefix(environment: Environment): string {
 
 /**
  * Release one optimizer environment. Server-level ownership remains until the
- * last registered optimizer environment closes. During a normal restart, the
- * last predecessor environment transfers its existing owner slot to the lazy
- * replacement so warm-cache paths remain stable without overlapping writers.
+ * last registered optimizer environment closes.
  */
 export async function releaseDepsCacheDir(
   environment: DevEnvironment,
@@ -166,35 +172,6 @@ export async function releaseDepsCacheDir(
 
   const config = environment.getTopLevelConfig()
   if (configStates.get(config) === state) configStates.delete(config)
-
-  const successor = state.restartSuccessor?.deref()
-  if (
-    successor &&
-    successor.restartPredecessor?.deref() === state &&
-    !successor.claimedPrefix &&
-    state.claimedPrefix
-  ) {
-    successor.claimedPrefix = state.claimedPrefix
-    successor.privatePrefix = state.privatePrefix
-    successor.stableOwner = state.stableOwner
-    successor.restartPredecessor = undefined
-    state.restartSuccessor = undefined
-
-    const successorConfig = successor.config.deref()
-    if (successor.stableOwner && successorConfig) {
-      successor.stableOwner.config = new WeakRef(successorConfig)
-    }
-
-    state.claimedPrefix = undefined
-    state.privatePrefix = undefined
-    state.stableOwner = undefined
-    return
-  }
-
-  if (successor?.restartPredecessor?.deref() === state) {
-    successor.restartPredecessor = undefined
-  }
-  state.restartSuccessor = undefined
 
   if (state.stableOwner) {
     const index = stableOwners.indexOf(state.stableOwner)
@@ -219,6 +196,13 @@ export async function releaseDepsCacheDir(
       // Best effort. Locked cache files should not make environment.close() fail.
     }
   }
+
+  // A restart successor only borrows a stable predecessor path for pre-listen
+  // planning. Clearing the claim makes its later optimizer init perform the
+  // real ownership decision after shutdown has completed.
+  state.claimedPrefix = undefined
+  state.privatePrefix = undefined
+  state.stableOwner = undefined
 }
 
 function findStableOwner(
