@@ -653,9 +653,8 @@ export function createDepsOptimizer(
   }
 
   function debouncedProcessing(timeout = debounceMs) {
-    // Debounced rerun, let other missing deps finished, issue a new
-    // optimization of deps (both old and newly found) once the previous
-    // optimizeDeps processing is finished
+    // Debounced rerun, let other missing dependencies be discovered before
+    // the next optimizeDeps run
     enqueuedRerun = undefined
     if (debounceProcessingHandle) clearTimeout(debounceProcessingHandle)
     if (newDepsToLogHandle) clearTimeout(newDepsToLogHandle)
