@@ -653,8 +653,9 @@ export function createDepsOptimizer(
   }
 
   function debouncedProcessing(timeout = debounceMs) {
-    // Debounced rerun, let other missing dependencies be discovered before
-    // the next optimizeDeps run
+    // Debounced rerun, let other missing deps finished, issue a new
+    // optimization of deps (both old and newly found) once the previous
+    // optimizeDeps processing is finished
     enqueuedRerun = undefined
     if (debounceProcessingHandle) clearTimeout(debounceProcessingHandle)
     if (newDepsToLogHandle) clearTimeout(newDepsToLogHandle)
@@ -833,6 +834,8 @@ function findInteropMismatches(
     if (!depInfo) continue
 
     if (depInfo.needsInterop !== discoveredDepInfo.needsInterop) {
+      // This only happens when a discovered dependency has mixed ESM and CJS syntax
+      // and it hasn't been manually added to optimizeDeps.needsInterop
       needsInteropMismatch.push(dep)
       debug?.(colors.cyan(`needsInterop mismatch detected for ${dep}`))
     }
