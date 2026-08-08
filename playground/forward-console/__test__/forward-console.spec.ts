@@ -1,6 +1,12 @@
 import { stripVTControlCharacters } from 'node:util'
 import { expect, test } from 'vitest'
-import { isServe, page, serverLogs } from '~utils'
+import {
+  editFile,
+  isServe,
+  page,
+  serverLogs,
+  untilBrowserLogAfter,
+} from '~utils'
 
 function normalizeLogs(logs: string[]) {
   return (
@@ -74,5 +80,36 @@ test.runIf(isServe)('dependency stack uses source map path', async () => {
     39 |  }
     40 |
  > HTMLButtonElement.<anonymous> src/main.ts:22:2
+`)
+})
+
+test.runIf(isServe)('updates source maps after source changes', async () => {
+  let logIndex = serverLogs.length
+  await page.click('#test-error')
+  await expect
+    .poll(() => normalizeLogs(serverLogs.slice(logIndex)))
+    .toContain(' > testError src/main.ts:30:8')
+
+  await untilBrowserLogAfter(
+    () =>
+      editFile('src/main.ts', (code) =>
+        code.replace(
+          'export type AnotherPadding = {\n  there: boolean\n}',
+          'export type AnotherPadding = {\n  there: boolean\n  shifted: boolean\n}',
+        ),
+      ),
+    '[vite] connected.',
+  )
+
+  logIndex = serverLogs.length
+  await page.click('#test-error')
+  await expect.poll(() => normalizeLogs(serverLogs.slice(logIndex))).toContain(`\
+ > testError src/main.ts:31:8
+    29 |
+    30 |  function testError() {
+    31 |    throw new Error('this is test error')
+       |          ^
+    32 |  }
+    33 |
 `)
 })
