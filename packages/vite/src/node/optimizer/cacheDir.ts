@@ -197,9 +197,9 @@ export async function releaseDepsCacheDir(
     }
   }
 
-  // A restart successor only borrows a stable predecessor path for pre-listen
-  // planning. Clearing the claim makes its later optimizer init perform the
-  // real ownership decision after shutdown has completed.
+  // A restart replacement may have borrowed this predecessor's stable path for
+  // pre-listen planning. Clear the released claim so the replacement's later
+  // optimizer init performs the real ownership decision after shutdown.
   state.claimedPrefix = undefined
   state.privatePrefix = undefined
   state.stableOwner = undefined
