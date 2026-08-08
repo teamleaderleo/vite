@@ -37,7 +37,10 @@ test('keeps a pre-init dependency that is outside the cold-start scan entries', 
   const cacheDir = path.join(root, '.vite')
   writePackage(root, 'preinit-dep', 'export const marker = "preinit"\n')
   fs.writeFileSync(path.join(root, 'entry.js'), 'import "preinit-dep"\n')
-  fs.writeFileSync(path.join(root, 'scan-entry.js'), 'export const marker = "scan"\n')
+  fs.writeFileSync(
+    path.join(root, 'scan-entry.js'),
+    'export const marker = "scan"\n',
+  )
 
   server = await createServer({
     configFile: false,
@@ -56,7 +59,9 @@ test('keeps a pre-init dependency that is outside the cold-start scan entries', 
   const environment = server.environments.client
   await environment.transformRequest('/entry.js')
 
-  expect(environment.depsOptimizer!.metadata.discovered['preinit-dep']).toBeTruthy()
+  expect(
+    environment.depsOptimizer!.metadata.discovered['preinit-dep'],
+  ).toBeTruthy()
 
   await environment.depsOptimizer!.init()
   await environment.waitForRequestsIdle()
