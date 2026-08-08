@@ -76,6 +76,41 @@ test('closes the watcher when initial configureServer fails', async () => {
   }
 })
 
+test('closes the watcher when a configureServer post hook fails', async () => {
+  let originalClose: (() => Promise<void>) | undefined
+  let closeCalls = 0
+
+  try {
+    await expect(
+      createServer({
+        configFile: false,
+        root: import.meta.dirname,
+        logLevel: 'silent',
+        server: { middlewareMode: true, ws: false },
+        plugins: [
+          {
+            name: 'test:fail-configure-post-hook',
+            configureServer(candidate) {
+              originalClose = candidate.watcher.close.bind(candidate.watcher)
+              candidate.watcher.close = async () => {
+                closeCalls++
+                await originalClose!()
+              }
+              return () => {
+                throw new Error('configureServer post hook failed')
+              }
+            },
+          },
+        ],
+      }),
+    ).rejects.toThrow('configureServer post hook failed')
+
+    expect(closeCalls).toBe(1)
+  } finally {
+    if (closeCalls === 0) await originalClose?.()
+  }
+})
+
 test('closes the watcher when initial buildStart fails', async () => {
   let originalClose: (() => Promise<void>) | undefined
   let closeCalls = 0
@@ -113,7 +148,8 @@ test('closes the watcher when initial buildStart fails', async () => {
 
 test('closes the watcher when environment init fails', async () => {
   let originalClose: (() => Promise<void>) | undefined
-  let closeCalls = 0
+  let watcherCloseCalls = 0
+  let environmentCloseCalls = 0
 
   class FailingInitEnvironment extends DevEnvironment {
     override async init(options?: Parameters<DevEnvironment['init']>[0]) {
@@ -122,10 +158,14 @@ test('closes the watcher when environment init fails', async () => {
 
       originalClose = watcher.close.bind(watcher)
       watcher.close = async () => {
-        closeCalls++
+        watcherCloseCalls++
         await originalClose!()
       }
       throw new Error('environment init failed')
+    }
+
+    override async close() {
+      environmentCloseCalls++
     }
   }
 
@@ -152,9 +192,10 @@ test('closes the watcher when environment init fails', async () => {
       }),
     ).rejects.toThrow('environment init failed')
 
-    expect(closeCalls).toBe(1)
+    expect(watcherCloseCalls).toBe(1)
+    expect(environmentCloseCalls).toBe(1)
   } finally {
-    if (closeCalls === 0) await originalClose?.()
+    if (watcherCloseCalls === 0) await originalClose?.()
   }
 })
 
@@ -224,5 +265,63 @@ test('closes an initialized environment when a sibling environment init fails', 
   } finally {
     if (clientCloseCalls === 0) await clientEnvironment?.close()
     await watcherClose?.()
+  }
+})
+
+test('closes the watcher and environment when environment listen fails', async () => {
+  let originalClose: (() => Promise<void>) | undefined
+  let watcherCloseCalls = 0
+  let environmentCloseCalls = 0
+
+  class FailingListenEnvironment extends DevEnvironment {
+    override async init(options?: Parameters<DevEnvironment['init']>[0]) {
+      await super.init(options)
+      const watcher = options?.watcher
+      if (!watcher) throw new Error('missing watcher')
+
+      originalClose = watcher.close.bind(watcher)
+      watcher.close = async () => {
+        watcherCloseCalls++
+        await originalClose!()
+      }
+    }
+
+    override async listen() {
+      throw new Error('environment listen failed')
+    }
+
+    override async close() {
+      environmentCloseCalls++
+      await super.close()
+    }
+  }
+
+  try {
+    await expect(
+      createServer({
+        configFile: false,
+        root: import.meta.dirname,
+        logLevel: 'silent',
+        server: { middlewareMode: true, ws: false },
+        environments: {
+          client: {
+            dev: {
+              createEnvironment(name, config, context) {
+                return new FailingListenEnvironment(name, config, {
+                  hot: true,
+                  transport: context.ws,
+                  disableFetchModule: true,
+                })
+              },
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow('environment listen failed')
+
+    expect(watcherCloseCalls).toBe(1)
+    expect(environmentCloseCalls).toBe(1)
+  } finally {
+    if (watcherCloseCalls === 0) await originalClose?.()
   }
 })
