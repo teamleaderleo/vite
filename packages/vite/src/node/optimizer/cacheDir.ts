@@ -84,12 +84,12 @@ export function reserveDepsCacheDir(
 }
 
 /**
- * Return the live dependency-cache prefix for optimizer paths and storage.
+ * Return the dependency-cache prefix used for path planning and storage.
  * During restart setup, a replacement whose predecessor owns the configured
- * stable prefix may plan paths against that prefix without claiming it. Normal
- * restart ordering closes the predecessor before optimizer init, so the later
- * storage call claims the now-free stable prefix. Private predecessors are not
- * inherited because doing so safely would require server-adoption state.
+ * stable prefix may plan paths against that prefix without recording a claim.
+ * Normal restart ordering closes the predecessor before optimizer init, so a
+ * later storage call records the now-free stable claim. Private predecessors
+ * are not inherited because safe transfer would require server-adoption state.
  */
 export function getDepsCachePrefix(environment: Environment): string {
   const config = environment.getTopLevelConfig()
