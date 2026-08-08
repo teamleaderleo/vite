@@ -213,6 +213,15 @@ export function createDepsOptimizer(
         newDepsDiscovered = true
       }
 
+      // A dependency may be discovered between createServer() and optimizer init.
+      // Keep it even when the cold-start scanner doesn't visit that module.
+      for (const [id, depInfo] of Object.entries(preInitDiscovered)) {
+        if (metadata.discovered[id]) continue
+
+        addOptimizedDepInfo(metadata, 'discovered', depInfo)
+        newDepsDiscovered = true
+      }
+
       environment.waitForRequestsIdle().then(onCrawlEnd)
 
       if (noDiscovery) {
@@ -824,8 +833,6 @@ function findInteropMismatches(
     if (!depInfo) continue
 
     if (depInfo.needsInterop !== discoveredDepInfo.needsInterop) {
-      // This only happens when a discovered dependency has mixed ESM and CJS syntax
-      // and it hasn't been manually added to optimizeDeps.needsInterop
       needsInteropMismatch.push(dep)
       debug?.(colors.cyan(`needsInterop mismatch detected for ${dep}`))
     }
