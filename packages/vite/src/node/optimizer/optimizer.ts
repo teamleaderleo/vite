@@ -137,6 +137,8 @@ export function createDepsOptimizer(
         result: Promise<DepOptimizationResult>
       }
     | undefined
+  let optimizationResultProcessing: Promise<DepOptimizationResult> | undefined
+  const activeOptimizerRuns = new Set<Promise<void>>()
 
   let discover:
     | {
@@ -147,11 +149,30 @@ export function createDepsOptimizer(
 
   async function close() {
     closed = true
-    await Promise.allSettled([
-      discover?.cancel(),
-      depsOptimizer.scanProcessing,
-      optimizationResult?.cancel(),
-    ])
+
+    // Let discovery finish cancelling first. It can publish a background
+    // optimization handle before scanProcessing settles, so read the current
+    // optimizer promise only after that boundary.
+    await Promise.allSettled([discover?.cancel(), depsOptimizer.scanProcessing])
+
+    const processing = optimizationResultProcessing
+    if (processing) {
+      const [settled] = await Promise.allSettled([processing])
+      if (settled.status === 'fulfilled') {
+        settled.value.cancel()
+      }
+    }
+
+    // At this point output has settled, so cancelling the outer handle cannot
+    // race an in-progress Rolldown write. This also covers a handle installed
+    // by the scanner while close was waiting for scanProcessing.
+    await Promise.allSettled([optimizationResult?.cancel()])
+
+    // runOptimizer owns result adoption and commit. A handle may be cleared
+    // before that work finishes, so wait until every active run has settled.
+    while (activeOptimizerRuns.size > 0) {
+      await Promise.allSettled([...activeOptimizerRuns])
+    }
   }
 
   let initState: 'idle' | 'initializing' | 'initialized' = 'idle'
@@ -253,6 +274,7 @@ export function createDepsOptimizer(
               // For dev, we run the scanner and the first optimization
               // run on the background
               optimizationResult = runOptimizeDeps(environment, knownDeps)
+              optimizationResultProcessing = optimizationResult.result
 
               // If the holdUntilCrawlEnd strategy is used, we wait until crawling has
               // ended to decide if we send this result to the browser or we need to
@@ -313,7 +335,17 @@ export function createDepsOptimizer(
     return knownDeps
   }
 
-  async function runOptimizer(preRunResult?: DepOptimizationResult) {
+  function runOptimizer(preRunResult?: DepOptimizationResult): Promise<void> {
+    const run = runOptimizerInternal(preRunResult)
+    activeOptimizerRuns.add(run)
+    run.then(
+      () => activeOptimizerRuns.delete(run),
+      () => activeOptimizerRuns.delete(run),
+    )
+    return run
+  }
+
+  async function runOptimizerInternal(preRunResult?: DepOptimizationResult) {
     // a successful completion of the optimizeDeps rerun will end up
     // creating new bundled version of all current and discovered deps
     // in the cache dir and a new metadata info object assigned
@@ -336,6 +368,7 @@ export function createDepsOptimizer(
     if (debounceProcessingHandle) clearTimeout(debounceProcessingHandle)
 
     if (closed) {
+      preRunResult?.cancel()
       currentlyProcessing = false
       depOptimizationProcessing.resolve()
       resolveEnqueuedProcessingPromises()
@@ -353,6 +386,7 @@ export function createDepsOptimizer(
         startNextDiscoveredBatch()
 
         optimizationResult = runOptimizeDeps(environment, knownDeps)
+        optimizationResultProcessing = optimizationResult.result
         processingResult = await optimizationResult.result
         optimizationResult = undefined
       }
