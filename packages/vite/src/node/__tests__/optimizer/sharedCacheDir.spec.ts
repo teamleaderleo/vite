@@ -4,6 +4,7 @@ import path from 'node:path'
 import { afterEach, expect, test, vi } from 'vitest'
 import type { ViteDevServer } from '../..'
 import { createServer, normalizePath } from '../..'
+import { _createServer } from '../../server'
 
 const servers = new Set<ViteDevServer>()
 let root: string | undefined
@@ -184,9 +185,12 @@ test('shares one cache owner prefix across client and ssr environments', async (
 
   expect(clientDirA).toBe(normalizePath(path.join(cacheDir, 'deps')))
   expect(ssrDirA).toBe(normalizePath(path.join(cacheDir, 'deps_ssr')))
-  expect(path.dirname(clientDirB)).toBe(normalizePath(cacheDir))
+  expect(normalizePath(path.dirname(clientDirB))).toBe(normalizePath(cacheDir))
   expect(path.basename(clientDirB)).toMatch(/^_deps_session_/)
   expect(ssrDirB).toBe(`${clientDirB}_ssr`)
+  expect(path.resolve(serverB.environments.ssr.config.cacheDir)).toBe(
+    path.resolve(cacheDir),
+  )
 
   // Recognition remains broad across environment suffixes for one server,
   // while the whole server is isolated from another live server's prefix.
@@ -275,6 +279,56 @@ test('keeps a warm dependency cache across a normal restart', async () => {
   expect(normalizePath(after.file)).toBe(
     normalizePath(path.join(cacheDir, 'deps', 'dep.js')),
   )
+})
+
+test('recognizes a warm optimized URL before optimizer init', async () => {
+  root = createRoot()
+  const cacheDir = path.join(root, '.vite-shared')
+  const dep = path.join(root, 'dep.js')
+  fs.writeFileSync(dep, 'export const marker = "pre-listen-warm"\n')
+
+  const seedServer = await createOptimizedServer(cacheDir, dep)
+  const seedInfo =
+    seedServer.environments.client.depsOptimizer!.metadata.optimized.dep
+  const warmUrl = `/${path.relative(root, seedInfo.file).split(path.sep).join('/')}`
+
+  await seedServer.close()
+  servers.delete(seedServer)
+
+  const server = await _createServer(
+    {
+      configFile: false,
+      root,
+      cacheDir,
+      logLevel: 'silent',
+      resolve: {
+        alias: {
+          dep,
+        },
+      },
+      optimizeDeps: {
+        noDiscovery: true,
+        include: ['dep'],
+      },
+      server: {
+        middlewareMode: true,
+        ws: false,
+      },
+    },
+    { listen: false },
+  )
+  servers.add(server)
+
+  const optimizer = server.environments.client.depsOptimizer!
+  expect(optimizer.metadata.optimized.dep).toBeUndefined()
+
+  // A real configured cache URL/file is meaningful optimizer use. It should
+  // claim the free stable prefix even though generic path checks stay lazy.
+  expect(optimizer.isOptimizedDepUrl(warmUrl)).toBe(true)
+  expect(optimizer.isOptimizedDepFile(seedInfo.file)).toBe(true)
+
+  await optimizer.init()
+  expect(optimizer.metadata.optimized.dep.file).toBe(seedInfo.file)
 })
 
 test('keeps same-config later discovery isolated between live servers', async () => {
