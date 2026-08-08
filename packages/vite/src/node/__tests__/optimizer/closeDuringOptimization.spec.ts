@@ -93,9 +93,9 @@ test('waits for active dependency optimizer output before close resolves', async
         const cacheEntries = fs.existsSync(cacheDir)
           ? fs.readdirSync(cacheDir)
           : []
-        expect(cacheEntries.some((entry) => entry.startsWith('deps_temp_'))).toBe(
-          false,
-        )
+        expect(
+          cacheEntries.some((entry) => entry.startsWith('deps_temp_')),
+        ).toBe(false)
       },
       { timeout: 5000 },
     )
