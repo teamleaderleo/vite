@@ -16,6 +16,10 @@ import {
   createDepsOptimizer,
   createExplicitDepsOptimizer,
 } from '../optimizer/optimizer'
+import {
+  linkDepsCacheDirRestart,
+  reserveDepsCacheDir,
+} from '../optimizer/cacheDir'
 import { ERR_OUTDATED_OPTIMIZED_DEP } from '../../shared/constants'
 import { cleanUrl, promiseWithResolvers } from '../../shared/utils'
 import type { ViteDevServer } from '../server'
@@ -58,6 +62,10 @@ export class DevEnvironment extends BaseEnvironment {
   moduleGraph: EnvironmentModuleGraph
 
   depsOptimizer?: DepsOptimizer
+  /**
+   * @internal
+   */
+  _releaseDepsCacheDir?: () => Promise<void>
   /**
    * @internal
    */
@@ -192,6 +200,7 @@ export class DevEnvironment extends BaseEnvironment {
       } else if (isDepOptimizationDisabled(optimizeDeps)) {
         this.depsOptimizer = undefined
       } else {
+        this._releaseDepsCacheDir = reserveDepsCacheDir(this)
         this.depsOptimizer = (
           optimizeDeps.noDiscovery
             ? createExplicitDepsOptimizer
@@ -214,6 +223,9 @@ export class DevEnvironment extends BaseEnvironment {
       return
     }
     this._initiated = true
+    if (options?.previousInstance) {
+      linkDepsCacheDirRestart(this, options.previousInstance)
+    }
     this._pluginContainer = await createEnvironmentPluginContainer(
       this,
       this.config.plugins,
@@ -385,6 +397,7 @@ export class DevEnvironment extends BaseEnvironment {
         }
       })(),
     ])
+    await this._releaseDepsCacheDir?.()
   }
 
   /**

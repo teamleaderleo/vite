@@ -36,6 +36,11 @@ import {
 import { isWindows } from '../../shared/utils'
 import type { Environment } from '../environment'
 import { transformWithOxc } from '../plugins/oxc'
+import {
+  getConfiguredDepsCachePrefix,
+  getDepsCachePrefix,
+  getDepsCachePrefixForRecognition,
+} from './cacheDir'
 import { ScanEnvironment, scanImports } from './scan'
 import { createOptimizeDepsIncludeResolver, expandGlobIds } from './resolve'
 import {
@@ -979,34 +984,46 @@ function getTempSuffix() {
 }
 
 function getDepsCacheDirPrefix(environment: Environment): string {
-  return normalizePath(path.resolve(environment.config.cacheDir, 'deps'))
+  return getDepsCachePrefix(environment)
 }
 
 export function createIsOptimizedDepFile(
   environment: Environment,
 ): (id: string) => boolean {
-  const depsCacheDirPrefix = getDepsCacheDirPrefix(environment)
-  return (id) => id.startsWith(depsCacheDirPrefix)
+  const configuredPrefix = getConfiguredDepsCachePrefix(environment)
+  return (id) => {
+    let depsCacheDirPrefix = getDepsCachePrefixForRecognition(environment)
+    if (!depsCacheDirPrefix) {
+      if (!id.startsWith(configuredPrefix)) return false
+      depsCacheDirPrefix = getDepsCachePrefix(environment)
+    }
+    return id.startsWith(depsCacheDirPrefix)
+  }
 }
 
 export function createIsOptimizedDepUrl(
   environment: Environment,
 ): (url: string) => boolean {
   const { root } = environment.config
-  const depsCacheDir = getDepsCacheDirPrefix(environment)
 
-  // determine the url prefix of files inside cache directory
-  const depsCacheDirRelative = normalizePath(path.relative(root, depsCacheDir))
-  const depsCacheDirPrefix = depsCacheDirRelative.startsWith('../')
-    ? // if the cache directory is outside root, the url prefix would be something
-      // like '/@fs/absolute/path/to/node_modules/.vite'
-      `/@fs/${removeLeadingSlash(normalizePath(depsCacheDir))}`
-    : // if the cache directory is inside root, the url prefix would be something
-      // like '/node_modules/.vite'
-      `/${depsCacheDirRelative}`
+  const toUrlPrefix = (depsCacheDir: string) => {
+    const depsCacheDirRelative = normalizePath(path.relative(root, depsCacheDir))
+    return depsCacheDirRelative.startsWith('../')
+      ? `/@fs/${removeLeadingSlash(normalizePath(depsCacheDir))}`
+      : `/${depsCacheDirRelative}`
+  }
+
+  const configuredUrlPrefix = toUrlPrefix(
+    getConfiguredDepsCachePrefix(environment),
+  )
 
   return function isOptimizedDepUrl(url: string): boolean {
-    return url.startsWith(depsCacheDirPrefix)
+    let depsCacheDir = getDepsCachePrefixForRecognition(environment)
+    if (!depsCacheDir) {
+      if (!url.startsWith(configuredUrlPrefix)) return false
+      depsCacheDir = getDepsCachePrefix(environment)
+    }
+    return url.startsWith(toUrlPrefix(depsCacheDir))
   }
 }
 
