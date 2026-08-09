@@ -23,6 +23,8 @@ test('can close a dev environment after plugin container init fails', async () =
     hot: false,
   })
 
-  await expect(environment.init()).rejects.toThrow('plugin container init failed')
+  await expect(environment.init()).rejects.toThrow(
+    'plugin container init failed',
+  )
   await expect(environment.close()).resolves.toBeUndefined()
 })
