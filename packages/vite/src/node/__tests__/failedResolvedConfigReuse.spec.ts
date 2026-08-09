@@ -32,3 +32,25 @@ test('allows a resolved config to be reused after server creation fails', async 
     await server.close()
   }
 })
+
+test('releases a resolved config when HTTPS server creation fails early', async () => {
+  const config = await resolveConfig(
+    {
+      configFile: false,
+      root: import.meta.dirname,
+      logLevel: 'silent',
+      server: {
+        https: { key: 'not a valid private key' },
+        ws: false,
+        watch: null,
+      },
+    },
+    'serve',
+  )
+
+  await expect(createServer(config)).rejects.toThrow()
+
+  config.server.https = undefined
+  const server = await createServer(config)
+  await server.close()
+})
