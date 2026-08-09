@@ -222,11 +222,10 @@ export async function preview(
     }
 
     // apply server hooks from plugins
-    const configurePreviewServerContext =
-      new BasicMinimalPluginContext(
-        { ...basePluginContextMeta, watchMode: false },
-        config.logger,
-      )
+    const configurePreviewServerContext = new BasicMinimalPluginContext(
+      { ...basePluginContextMeta, watchMode: false },
+      config.logger,
+    )
     const postHooks: ((() => void) | void)[] = []
     for (const hook of config.getSortedPluginHooks('configurePreviewServer')) {
       postHooks.push(await hook.call(configurePreviewServerContext, server))
