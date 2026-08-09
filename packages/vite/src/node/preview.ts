@@ -207,106 +207,113 @@ export async function preview(
 
   setupSIGTERMListener(closeServerAndExit)
 
-  // cors
-  const { cors } = config.preview
-  if (cors !== false) {
-    app.use(corsMiddleware(typeof cors === 'boolean' ? {} : cors))
-  }
-
-  // host check (to prevent DNS rebinding attacks)
-  const { allowedHosts } = config.preview
-  // no need to check for HTTPS as HTTPS is not vulnerable to DNS rebinding attacks
-  if (allowedHosts !== true && !config.preview.https) {
-    app.use(hostValidationMiddleware(allowedHosts, true))
-  }
-
-  // apply server hooks from plugins
-  const configurePreviewServerContext = new BasicMinimalPluginContext(
-    { ...basePluginContextMeta, watchMode: false },
-    config.logger,
-  )
-  const postHooks: ((() => void) | void)[] = []
-  for (const hook of config.getSortedPluginHooks('configurePreviewServer')) {
-    postHooks.push(await hook.call(configurePreviewServerContext, server))
-  }
-
-  // proxy
-  const { proxy } = config.preview
-  if (proxy) {
-    app.use(proxyMiddleware(httpServer, proxy, config))
-  }
-
-  app.use(compression())
-
-  // base
-  if (config.base !== '/') {
-    app.use(baseMiddleware(config.rawBase, false))
-  }
-
-  // static assets
-  const headers = config.preview.headers
-  const viteAssetMiddleware = (...args: readonly [any, any?, any?]) =>
-    sirv(distDir, {
-      etag: true,
-      dev: true,
-      extensions: [],
-      ignores: false,
-      setHeaders(res) {
-        if (headers) {
-          for (const name in headers) {
-            res.setHeader(name, headers[name]!)
-          }
-        }
-      },
-      shouldServe(filePath) {
-        return shouldServeFile(filePath, distDir)
-      },
-    })(...args)
-
-  app.use(viteAssetMiddleware)
-
-  // html fallback
-  if (config.appType === 'spa' || config.appType === 'mpa') {
-    app.use(htmlFallbackMiddleware(distDir, config.appType === 'spa'))
-  }
-
-  // apply post server hooks from plugins
-  postHooks.forEach((fn) => fn && fn())
-
-  if (config.appType === 'spa' || config.appType === 'mpa') {
-    // transform index.html
-    const normalizedDistDir = normalizePath(distDir)
-    app.use(indexHtmlMiddleware(normalizedDistDir, server))
-
-    // handle 404s
-    app.use(notFoundMiddleware())
-  }
-
-  const hostname = await resolveHostname(options.host)
-
-  await httpServerStart(httpServer, {
-    port: options.port,
-    strictPort: options.strictPort,
-    host: hostname.host,
-    logger,
-  })
-
-  server.resolvedUrls = resolveServerUrls(
-    httpServer,
-    config.preview,
-    hostname,
-    httpsOptions,
-    config,
-  )
-
-  if (options.open) {
-    const url = getServerUrlByHost(server.resolvedUrls, options.host)
-    if (url) {
-      const path =
-        typeof options.open === 'string' ? new URL(options.open, url).href : url
-      openBrowser(path, true, logger)
+  try {
+    // cors
+    const { cors } = config.preview
+    if (cors !== false) {
+      app.use(corsMiddleware(typeof cors === 'boolean' ? {} : cors))
     }
-  }
 
-  return server as PreviewServer
+    // host check (to prevent DNS rebinding attacks)
+    const { allowedHosts } = config.preview
+    // no need to check for HTTPS as HTTPS is not vulnerable to DNS rebinding attacks
+    if (allowedHosts !== true && !config.preview.https) {
+      app.use(hostValidationMiddleware(allowedHosts, true))
+    }
+
+    // apply server hooks from plugins
+    const configurePreviewServerContext = new BasicMinimalPluginContext(
+      { ...basePluginContextMeta, watchMode: false },
+      config.logger,
+    )
+    const postHooks: ((() => void) | void)[] = []
+    for (const hook of config.getSortedPluginHooks('configurePreviewServer')) {
+      postHooks.push(await hook.call(configurePreviewServerContext, server))
+    }
+
+    // proxy
+    const { proxy } = config.preview
+    if (proxy) {
+      app.use(proxyMiddleware(httpServer, proxy, config))
+    }
+
+    app.use(compression())
+
+    // base
+    if (config.base !== '/') {
+      app.use(baseMiddleware(config.rawBase, false))
+    }
+
+    // static assets
+    const headers = config.preview.headers
+    const viteAssetMiddleware = (...args: readonly [any, any?, any?]) =>
+      sirv(distDir, {
+        etag: true,
+        dev: true,
+        extensions: [],
+        ignores: false,
+        setHeaders(res) {
+          if (headers) {
+            for (const name in headers) {
+              res.setHeader(name, headers[name]!)
+            }
+          }
+        },
+        shouldServe(filePath) {
+          return shouldServeFile(filePath, distDir)
+        },
+      })(...args)
+
+    app.use(viteAssetMiddleware)
+
+    // html fallback
+    if (config.appType === 'spa' || config.appType === 'mpa') {
+      app.use(htmlFallbackMiddleware(distDir, config.appType === 'spa'))
+    }
+
+    // apply post server hooks from plugins
+    postHooks.forEach((fn) => fn && fn())
+
+    if (config.appType === 'spa' || config.appType === 'mpa') {
+      // transform index.html
+      const normalizedDistDir = normalizePath(distDir)
+      app.use(indexHtmlMiddleware(normalizedDistDir, server))
+
+      // handle 404s
+      app.use(notFoundMiddleware())
+    }
+
+    const hostname = await resolveHostname(options.host)
+
+    await httpServerStart(httpServer, {
+      port: options.port,
+      strictPort: options.strictPort,
+      host: hostname.host,
+      logger,
+    })
+
+    server.resolvedUrls = resolveServerUrls(
+      httpServer,
+      config.preview,
+      hostname,
+      httpsOptions,
+      config,
+    )
+
+    if (options.open) {
+      const url = getServerUrlByHost(server.resolvedUrls, options.host)
+      if (url) {
+        const path =
+          typeof options.open === 'string'
+            ? new URL(options.open, url).href
+            : url
+        openBrowser(path, true, logger)
+      }
+    }
+
+    return server as PreviewServer
+  } catch (error) {
+    await server.close()
+    throw error
+  }
 }
