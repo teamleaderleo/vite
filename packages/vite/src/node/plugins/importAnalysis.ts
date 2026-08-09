@@ -255,7 +255,7 @@ export function importAnalysisPlugin(config: ResolvedConfig): Plugin {
     return ssr ? _ssrEnv : _env
   }
 
-  return {
+  const plugin = {
     name: 'vite:import-analysis',
 
     applyToEnvironment(environment) {
@@ -892,6 +892,14 @@ export function importAnalysisPlugin(config: ResolvedConfig): Plugin {
       } else {
         return source
       }
+    },
+  } satisfies Plugin
+
+  return {
+    ...plugin,
+    transform: {
+      order: 'post',
+      handler: plugin.transform,
     },
   }
 }
