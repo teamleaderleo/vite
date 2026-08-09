@@ -103,8 +103,7 @@ export class DevEnvironment extends BaseEnvironment {
    * Hot channel for this environment. If not provided or disabled,
    * it will be a noop channel that does nothing.
    *
-   * @example
-   * environment.hot.send({ type: 'full-reload' })
+   * @example `environment.hot.send({ type: 'full-reload' })
    */
   hot: NormalizedHotChannel
 
@@ -371,7 +370,9 @@ export class DevEnvironment extends BaseEnvironment {
 
     this._crawlEndFinder.cancel()
     await Promise.allSettled([
-      this.bundledDev ? this.bundledDev.close() : this.pluginContainer.close(),
+      this.bundledDev
+        ? this.bundledDev.close()
+        : this._pluginContainer?.close(),
       this.depsOptimizer?.close(),
       // WebSocketServer is independent of HotChannel and should not be closed on environment close
       isWebSocketServer in this.hot ? Promise.resolve() : this.hot.close(),
@@ -389,8 +390,7 @@ export class DevEnvironment extends BaseEnvironment {
 
   /**
    * Calling `await environment.waitForRequestsIdle(id)` will wait until all static imports
-   * are processed after the first transformRequest call. If called from a load or transform
-   * plugin hook, the id needs to be passed as a parameter to avoid deadlocks.
+   * are processed after the first transformRequest call. If called from a load or transform plugin hook, the id needs to be passed as a parameter to avoid deadlocks.
    * Calling this function after the first static imports section of the module graph has been
    * processed will resolve immediately.
    * @experimental
