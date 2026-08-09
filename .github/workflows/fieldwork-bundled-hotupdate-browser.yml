@@ -1,0 +1,61 @@
+name: Fieldwork bundled hotUpdate browser probe
+
+permissions: {}
+
+on:
+  push:
+    branches:
+      - research/fieldwork-25-bundled-dev-hotupdate-browser
+    paths:
+      - playground/plugin-hot-update/**
+      - research/fieldwork-25/bundled-dev-hotupdate/**
+      - .github/workflows/fieldwork-bundled-hotupdate-browser.yml
+  pull_request:
+    paths:
+      - playground/plugin-hot-update/**
+      - research/fieldwork-25/bundled-dev-hotupdate/**
+      - .github/workflows/fieldwork-bundled-hotupdate-browser.yml
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: Compare classic and bundled plugin hot updates
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Set Node version
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium
+        run: pnpm playwright install chromium
+
+      - name: Build Vite
+        run: pnpm run build
+
+      - name: Run classic dev browser control
+        run: pnpm exec vitest run -c vitest.config.e2e.ts playground/plugin-hot-update/__tests__/plugin-hot-update.spec.ts
+
+      - name: Run bundled dev browser comparison
+        run: VITE_TEST_BUNDLED_DEV=1 pnpm exec vitest run -c vitest.config.e2e.ts playground/plugin-hot-update/__tests__/plugin-hot-update.spec.ts
