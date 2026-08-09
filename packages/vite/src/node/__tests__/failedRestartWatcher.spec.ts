@@ -239,11 +239,15 @@ test('closes an initialized environment when a sibling environment init fails', 
           client: {
             dev: {
               createEnvironment(name, config, context) {
-                clientEnvironment = new TrackingClientEnvironment(name, config, {
-                  hot: true,
-                  transport: context.ws,
-                  disableFetchModule: true,
-                })
+                clientEnvironment = new TrackingClientEnvironment(
+                  name,
+                  config,
+                  {
+                    hot: true,
+                    transport: context.ws,
+                    disableFetchModule: true,
+                  },
+                )
                 return clientEnvironment
               },
             },
