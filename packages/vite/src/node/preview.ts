@@ -304,7 +304,9 @@ export async function preview(
       const url = getServerUrlByHost(server.resolvedUrls, options.host)
       if (url) {
         const path =
-          typeof options.open === 'string' ? new URL(options.open, url).href : url
+          typeof options.open === 'string'
+            ? new URL(options.open, url).href
+            : url
         openBrowser(path, true, logger)
       }
     }
