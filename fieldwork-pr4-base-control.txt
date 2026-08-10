@@ -1,0 +1,2 @@
+Internal CI negative control for Vite PR #4 renewal.
+No runtime source files are changed.
