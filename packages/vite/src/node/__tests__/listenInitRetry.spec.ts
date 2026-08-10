@@ -123,3 +123,54 @@ test('removes the resolved-url listener after an HTTP startup failure', async ()
     await server?.close()
   }
 })
+
+test('resolves URLs before user listening handlers after port fallback', async () => {
+  const blocker = createNetServer()
+  let server: ViteDevServer | undefined
+  let resolveSeenUrls!: (urls: ViteDevServer['resolvedUrls']) => void
+  const seenUrls = new Promise<ViteDevServer['resolvedUrls']>((resolve) => {
+    resolveSeenUrls = resolve
+  })
+
+  await new Promise<void>((resolve, reject) => {
+    blocker.once('error', reject)
+    blocker.listen(0, '0.0.0.0', resolve)
+  })
+  const blockedPort = (blocker.address() as { port: number }).port
+
+  try {
+    server = await createServer({
+      configFile: false,
+      root: import.meta.dirname,
+      logLevel: 'silent',
+      server: {
+        host: '127.0.0.1',
+        port: blockedPort,
+        strictPort: false,
+        watch: null,
+        ws: false,
+      },
+      plugins: [
+        {
+          name: 'observe-resolved-urls-after-port-fallback',
+          configureServer(candidate) {
+            candidate.httpServer?.on('listening', () => {
+              resolveSeenUrls(candidate.resolvedUrls)
+            })
+          },
+        },
+      ],
+    })
+
+    await server.listen()
+    const urls = await seenUrls
+    const actualPort = (server.httpServer!.address() as { port: number }).port
+
+    expect(actualPort).not.toBe(blockedPort)
+    expect(urls).not.toBeNull()
+    expect(urls?.local).toContain(`http://127.0.0.1:${actualPort}/`)
+  } finally {
+    await new Promise<void>((resolve) => blocker.close(() => resolve()))
+    await server?.close()
+  }
+})
