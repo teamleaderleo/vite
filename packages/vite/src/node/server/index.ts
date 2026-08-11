@@ -177,8 +177,8 @@ export interface ServerOptions extends CommonServerOptions {
    * the [`x_google_ignoreList` source map extension](https://developer.chrome.com/blog/devtools-better-angular-debugging/#the-x_google_ignorelist-source-map-extension).
    *
    * By default, it excludes all paths containing `node_modules`. You can pass `false` to
-   * disable this behavior, or, for full control, a function that takes the source path and
-   * sourcemap path and returns whether to ignore the source path.
+   * disable this behavior, or, for full control, a function that takes the source path
+   * and sourcemap path and returns whether to ignore the source path.
    */
   sourcemapIgnoreList?:
     | false
@@ -572,25 +572,43 @@ export async function _createServer(
     : createNoopWatcher(resolvedWatchOptions)
 
   const environments: Record<string, DevEnvironment> = {}
+  const closeHttpServer = createServerCloseFn(httpServer)
+  const closePreServerResources = async () => {
+    await Promise.allSettled([
+      watcher.close(),
+      ws.close(),
+      Promise.allSettled(
+        Object.values(environments).map(async (environment) =>
+          environment.close(),
+        ),
+      ),
+      closeHttpServer(),
+    ])
+  }
 
-  await Promise.all(
-    Object.entries(config.environments).map(
-      async ([name, environmentOptions]) => {
-        const environment = await environmentOptions.dev.createEnvironment(
-          name,
-          config,
-          {
-            ws,
-          },
-        )
-        environments[name] = environment
+  const environmentPromises = Object.entries(config.environments).map(
+    async ([name, environmentOptions]) => {
+      const environment = await environmentOptions.dev.createEnvironment(
+        name,
+        config,
+        {
+          ws,
+        },
+      )
+      environments[name] = environment
 
-        const previousInstance =
-          options.previousEnvironments?.[environment.name]
-        await environment.init({ watcher, previousInstance })
-      },
-    ),
+      const previousInstance = options.previousEnvironments?.[environment.name]
+      await environment.init({ watcher, previousInstance })
+    },
   )
+
+  try {
+    await Promise.all(environmentPromises)
+  } catch (e) {
+    await Promise.allSettled(environmentPromises)
+    await closePreServerResources().catch(() => {})
+    throw e
+  }
 
   // Backward compatibility
 
@@ -599,8 +617,6 @@ export async function _createServer(
     ssr: () => environments.ssr.moduleGraph,
   })
   let pluginContainer = createPluginContainer(environments)
-
-  const closeHttpServer = createServerCloseFn(httpServer)
 
   const devHtmlTransformFn = createDevHtmlTransformFn(config)
 
@@ -615,7 +631,7 @@ export async function _createServer(
       watcher.close(),
       ws.close(),
       Promise.allSettled(
-        Object.values(server.environments).map((environment) =>
+        Object.values(server.environments).map(async (environment) =>
           environment.close(),
         ),
       ),
@@ -830,6 +846,17 @@ export async function _createServer(
     _shortcutsState: options.previousShortcutsState,
   }
 
+  const runDuringConstruction = async <T>(
+    fn: () => T | Promise<T>,
+  ): Promise<T> => {
+    try {
+      return await fn()
+    } catch (e) {
+      await server.close().catch(() => {})
+      throw e
+    }
+  }
+
   // maintain consistency with the server instance after restarting.
   const reflexServer = new Proxy(server, {
     get: (_, property: keyof ViteDevServer) => {
@@ -965,7 +992,11 @@ export async function _createServer(
   )
   const postHooks: ((() => void) | void)[] = []
   for (const hook of config.getSortedPluginHooks('configureServer')) {
-    postHooks.push(await hook.call(configureServerContext, reflexServer))
+    postHooks.push(
+      await runDuringConstruction(() =>
+        hook.call(configureServerContext, reflexServer),
+      ),
+    )
   }
 
   // Internal middlewares ------------------------------------------------------
@@ -1034,7 +1065,9 @@ export async function _createServer(
 
   // This is applied before the html middleware so that user middleware can
   // serve custom content instead of index.html.
-  postHooks.forEach((fn) => fn && fn())
+  await runDuringConstruction(() => {
+    postHooks.forEach((fn) => fn && fn())
+  })
 
   if (config.appType === 'spa' || config.appType === 'mpa') {
     // transform index.html
@@ -1066,9 +1099,15 @@ export async function _createServer(
 
       // ensure ws server started
       if (onListen || options.listen) {
-        await Promise.all(
-          Object.values(environments).map((e) => e.listen(server)),
+        const listenPromises = Object.values(environments).map((e) =>
+          e.listen(server),
         )
+        try {
+          await Promise.all(listenPromises)
+        } catch (e) {
+          await Promise.allSettled(listenPromises)
+          throw e
+        }
       }
 
       initingServer = undefined
@@ -1090,7 +1129,7 @@ export async function _createServer(
       return listen(port, ...args)
     }) as any
   } else {
-    await initServer(false)
+    await runDuringConstruction(() => initServer(false))
   }
 
   return server
