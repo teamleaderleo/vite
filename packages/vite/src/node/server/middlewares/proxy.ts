@@ -76,7 +76,7 @@ export function proxyMiddleware(
   httpServer: HttpServer | null,
   options: NonNullable<CommonServerOptions['proxy']>,
   config: ResolvedConfig,
-): Connect.NextHandleFunction {
+): Connect.NextHandleFunction & { close: () => void } {
   // lazy require only when proxy is used
   const proxies: Record<string, [httpProxy.ProxyServer, ProxyOptions]> = {}
 
@@ -138,8 +138,16 @@ export function proxyMiddleware(
     proxies[context] = [proxy, { ...opts }]
   })
 
+  let upgradeHandler:
+    | ((
+        req: http.IncomingMessage,
+        socket: import('node:stream').Duplex,
+        head: Buffer,
+      ) => void)
+    | undefined
+
   if (httpServer) {
-    httpServer.on('upgrade', async (req, socket, head) => {
+    upgradeHandler = async (req, socket, head) => {
       const url = req.url!
       for (const context in proxies) {
         if (doesProxyContextMatchUrl(context, url)) {
@@ -183,11 +191,16 @@ export function proxyMiddleware(
           }
         }
       }
-    })
+    }
+    httpServer.on('upgrade', upgradeHandler)
   }
 
   // Keep the named function. The name is visible in debug logs via `DEBUG=connect:dispatcher ...`
-  return async function viteProxyMiddleware(req, res, next) {
+  const viteProxyMiddleware = async function viteProxyMiddleware(
+    req,
+    res,
+    next,
+  ) {
     const url = req.url!
     for (const context in proxies) {
       if (doesProxyContextMatchUrl(context, url)) {
@@ -226,6 +239,14 @@ export function proxyMiddleware(
     }
     next()
   }
+
+  return Object.assign(viteProxyMiddleware, {
+    close() {
+      if (httpServer && upgradeHandler) {
+        httpServer.off('upgrade', upgradeHandler)
+      }
+    },
+  })
 }
 
 function doesProxyContextMatchUrl(context: string, url: string): boolean {

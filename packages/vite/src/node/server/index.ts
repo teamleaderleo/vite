@@ -603,6 +603,7 @@ export async function _createServer(
   const closeHttpServer = createServerCloseFn(httpServer)
 
   const devHtmlTransformFn = createDevHtmlTransformFn(config)
+  let proxyMiddlewareInstance: ReturnType<typeof proxyMiddleware> | undefined
 
   // Promise used by `server.close()` to ensure `closeServer()` is only called once
   let closeServerPromise: Promise<void> | undefined
@@ -610,6 +611,7 @@ export async function _createServer(
     if (!middlewareMode) {
       teardownSIGTERMListener(closeServerAndExit)
     }
+    proxyMiddlewareInstance?.close()
 
     await Promise.allSettled([
       watcher.close(),
@@ -979,7 +981,8 @@ export async function _createServer(
   if (proxy) {
     const middlewareServer =
       (isObject(middlewareMode) ? middlewareMode.server : null) || httpServer
-    middlewares.use(proxyMiddleware(middlewareServer, proxy, config))
+    proxyMiddlewareInstance = proxyMiddleware(middlewareServer, proxy, config)
+    middlewares.use(proxyMiddlewareInstance)
   }
 
   // base
