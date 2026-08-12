@@ -45,8 +45,8 @@ test('watchChange hook can await server.restart without self-deadlocking', async
 
   const entered = promiseWithResolvers()
   const finished = promiseWithResolvers()
-  let server
-  server = await createServer({
+  const serverRef = {}
+  const server = await createServer({
     root,
     configFile: false,
     logLevel: 'silent',
@@ -56,13 +56,15 @@ test('watchChange hook can await server.restart without self-deadlocking', async
         async watchChange(id) {
           if (path.resolve(id) !== stateFile) return
           entered.resolve()
-          await server.restart()
+          if (!serverRef.current) throw new Error('missing test server')
+          await serverRef.current.restart()
           finished.resolve()
         },
       },
     ],
     server: { middlewareMode: true, ws: false },
   })
+  serverRef.current = server
   onTestFinished(() => server.close())
 
   server.watcher.emit('change', stateFile)

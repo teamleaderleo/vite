@@ -14,6 +14,7 @@ env:
   HISTORICAL_HEAD: 7a735db6e936f9921199fbda855be09375a272ee
   HISTORICAL_BRANCH: fix/fieldwork-25-watchchange-error-isolation
   TARGET_BRANCH: candidate/watchchange-error-isolation-b4d
+  TARGET_EXPECTED: 755b916a0cc00f2a91eddc6de683e350f59f4780
   SERVER_PATH: packages/vite/src/node/server/index.ts
   CONTAINER_PATH: packages/vite/src/node/server/pluginContainer.ts
   TEST_PATH: packages/vite/src/node/__tests__/server/watchChange-error-isolation.spec.js
@@ -83,7 +84,7 @@ jobs:
           set -euo pipefail
           pnpm exec oxfmt --write "$SERVER_PATH" "$CONTAINER_PATH" "$TEST_PATH"
           pnpm exec oxfmt --check "$SERVER_PATH" "$CONTAINER_PATH" "$TEST_PATH"
-          pnpm exec eslint --concurrency auto "$SERVER_PATH" "$CONTAINER_PATH" "$TEST_PATH"
+          pnpm exec eslint --max-warnings 0 --concurrency auto "$SERVER_PATH" "$CONTAINER_PATH" "$TEST_PATH"
           git diff --check
 
       - name: Build Vite before focused tests
@@ -124,5 +125,5 @@ jobs:
           git add "$SERVER_PATH" "$CONTAINER_PATH" "$TEST_PATH"
           git commit -m 'fix(dev): isolate watchChange errors without restart deadlock'
           git push \
-            --force-with-lease="refs/heads/$TARGET_BRANCH:$CURRENT_BASE" \
+            --force-with-lease="refs/heads/$TARGET_BRANCH:$TARGET_EXPECTED" \
             origin "HEAD:refs/heads/$TARGET_BRANCH"
