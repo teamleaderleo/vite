@@ -53,13 +53,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t changed < <(git diff --name-only | sort)
-          expected=(
-            packages/vite/src/node/__tests__/server/watchChange-error-isolation.spec.js
-            packages/vite/src/node/server/index.ts
-            packages/vite/src/node/server/pluginContainer.ts
-          )
-          test "${changed[*]}" = "${expected[*]}"
+          {
+            git diff --name-only
+            git ls-files --others --exclude-standard
+          } | sort -u > /tmp/actual-files
+          printf '%s\n' \
+            packages/vite/src/node/__tests__/server/watchChange-error-isolation.spec.js \
+            packages/vite/src/node/server/index.ts \
+            packages/vite/src/node/server/pluginContainer.ts \
+            | sort -u > /tmp/expected-files
+          diff -u /tmp/expected-files /tmp/actual-files
           git diff --check
 
       - name: Set up pnpm
@@ -105,13 +108,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t changed < <(git diff --name-only | sort)
-          expected=(
-            packages/vite/src/node/__tests__/server/watchChange-error-isolation.spec.js
-            packages/vite/src/node/server/index.ts
-            packages/vite/src/node/server/pluginContainer.ts
-          )
-          test "${changed[*]}" = "${expected[*]}"
+          {
+            git diff --name-only
+            git ls-files --others --exclude-standard
+          } | sort -u > /tmp/actual-files
+          printf '%s\n' \
+            packages/vite/src/node/__tests__/server/watchChange-error-isolation.spec.js \
+            packages/vite/src/node/server/index.ts \
+            packages/vite/src/node/server/pluginContainer.ts \
+            | sort -u > /tmp/expected-files
+          diff -u /tmp/expected-files /tmp/actual-files
           git diff --check
           git config user.name 'Fieldwork Repair'
           git config user.email 'fieldwork-repair@users.noreply.github.com'
