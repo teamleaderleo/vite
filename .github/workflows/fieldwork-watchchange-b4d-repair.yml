@@ -1,0 +1,122 @@
+name: Fieldwork watchChange current-main repair
+
+on:
+  push:
+    branches:
+      - carrier/watchchange-b4d-repair
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CURRENT_BASE: b4d66fee14d970f45b8a6f3d7d6aee73ca9b88ab
+  HISTORICAL_HEAD: 7a735db6e936f9921199fbda855be09375a272ee
+  HISTORICAL_BRANCH: fix/fieldwork-25-watchchange-error-isolation
+  TARGET_BRANCH: candidate/watchchange-error-isolation-b4d
+  SERVER_PATH: packages/vite/src/node/server/index.ts
+  CONTAINER_PATH: packages/vite/src/node/server/pluginContainer.ts
+  TEST_PATH: packages/vite/src/node/__tests__/server/watchChange-error-isolation.spec.js
+
+jobs:
+  repair-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - name: Check out carrier head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Preserve materializer and reset to exact current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show HEAD:.github/fieldwork/materialize-watchchange-b4d-repair.py > /tmp/materialize.py
+          git reset --hard "$CURRENT_BASE"
+          test "$(git rev-parse HEAD)" = "$CURRENT_BASE"
+
+      - name: Fetch historical regression source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "refs/heads/$HISTORICAL_BRANCH:refs/remotes/origin/$HISTORICAL_BRANCH"
+          test "$(git rev-parse origin/$HISTORICAL_BRANCH)" = "$HISTORICAL_HEAD"
+          mkdir -p "$(dirname "$TEST_PATH")"
+          git show "$HISTORICAL_HEAD:$TEST_PATH" > "$TEST_PATH"
+
+      - name: Materialize restart-safe watcher repair
+        run: python3 /tmp/materialize.py
+
+      - name: Verify exact three-file source fence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t changed < <(git diff --name-only | sort)
+          expected=(
+            packages/vite/src/node/__tests__/server/watchChange-error-isolation.spec.js
+            packages/vite/src/node/server/index.ts
+            packages/vite/src/node/server/pluginContainer.ts
+          )
+          test "${changed[*]}" = "${expected[*]}"
+          git diff --check
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Format and lint exact source fence
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec oxfmt --write "$SERVER_PATH" "$CONTAINER_PATH" "$TEST_PATH"
+          pnpm exec oxfmt --check "$SERVER_PATH" "$CONTAINER_PATH" "$TEST_PATH"
+          pnpm exec eslint --concurrency auto "$SERVER_PATH" "$CONTAINER_PATH" "$TEST_PATH"
+          git diff --check
+
+      - name: Build Vite before focused tests
+        run: pnpm --filter vite build
+
+      - name: Ensure internal helper does not leak into declarations
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R --include='*.d.ts' -n 'watchChangeWithErrorHandler' packages/vite/dist; then
+            echo 'watchChangeWithErrorHandler leaked into generated declarations' >&2
+            exit 1
+          fi
+
+      - name: Run focused watchChange controls
+        run: pnpm exec vitest run "$TEST_PATH"
+
+      - name: Run Vite typecheck
+        run: pnpm --filter vite typecheck
+
+      - name: Reverify source fence and publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t changed < <(git diff --name-only | sort)
+          expected=(
+            packages/vite/src/node/__tests__/server/watchChange-error-isolation.spec.js
+            packages/vite/src/node/server/index.ts
+            packages/vite/src/node/server/pluginContainer.ts
+          )
+          test "${changed[*]}" = "${expected[*]}"
+          git diff --check
+          git config user.name 'Fieldwork Repair'
+          git config user.email 'fieldwork-repair@users.noreply.github.com'
+          git add "$SERVER_PATH" "$CONTAINER_PATH" "$TEST_PATH"
+          git commit -m 'fix(dev): isolate watchChange errors without restart deadlock'
+          git push \
+            --force-with-lease="refs/heads/$TARGET_BRANCH:$CURRENT_BASE" \
+            origin "HEAD:refs/heads/$TARGET_BRANCH"
