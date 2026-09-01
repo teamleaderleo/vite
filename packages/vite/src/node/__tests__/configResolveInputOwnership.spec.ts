@@ -164,6 +164,79 @@ test('preserves custom logger identity', async () => {
   expect(resolved.logger).toBe(customLogger)
 })
 
+test('preserves third-party CSS service identity', async () => {
+  const entryImporter = {
+    canonicalize() {
+      return null
+    },
+    load() {
+      return null
+    },
+  }
+  const importer = {
+    canonicalize() {
+      return null
+    },
+    load() {
+      return null
+    },
+  }
+  const sassLogger = {
+    warn() {
+      return undefined
+    },
+    debug() {
+      return undefined
+    },
+  }
+  const postcssSyntax = {
+    parse() {
+      return undefined
+    },
+    stringify() {
+      return undefined
+    },
+  }
+  const lightningVisitor = {
+    Declaration() {
+      return undefined
+    },
+  }
+  const css = {
+    preprocessorOptions: {
+      scss: {
+        importer: entryImporter,
+        importers: [importer],
+        logger: sassLogger,
+      },
+    },
+    postcss: {
+      parser: postcssSyntax,
+      stringifier: postcssSyntax,
+      syntax: postcssSyntax,
+    },
+    lightningcss: {
+      visitor: lightningVisitor,
+    },
+  }
+  const inlineConfig = {
+    configFile: false,
+    logLevel: 'silent',
+    css,
+  } as InlineConfig
+
+  const resolved = await resolveConfig(inlineConfig, 'serve')
+  const resolvedCss = resolved.css as unknown as typeof css
+
+  expect(resolvedCss.preprocessorOptions.scss.importer).toBe(entryImporter)
+  expect(resolvedCss.preprocessorOptions.scss.importers[0]).toBe(importer)
+  expect(resolvedCss.preprocessorOptions.scss.logger).toBe(sassLogger)
+  expect(resolvedCss.postcss.parser).toBe(postcssSyntax)
+  expect(resolvedCss.postcss.stringifier).toBe(postcssSyntax)
+  expect(resolvedCss.postcss.syntax).toBe(postcssSyntax)
+  expect(resolvedCss.lightningcss.visitor).toBe(lightningVisitor)
+})
+
 test('preserves terser nameCache identity', async () => {
   const nameCache = {}
   const inlineConfig: InlineConfig = {
