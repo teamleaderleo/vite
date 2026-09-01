@@ -235,6 +235,9 @@ jobs:
       - name: Format experiment
         run: pnpm exec oxfmt --write packages/vite/src/node/config.ts packages/vite/src/node/__tests__/configResolveCloneBoundary.spec.ts
 
+      - name: Build Vite bundle
+        run: pnpm --filter vite build-bundle
+
       - name: Run focused regression tests
         run: pnpm test-unit packages/vite/src/node/__tests__/configResolveCloneBoundary.spec.ts
 
