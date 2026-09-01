@@ -36,7 +36,7 @@ function clonePluginOption(
 
 function cloneConfigValue(
   value: unknown,
-  key: string | undefined,
+  key: PropertyKey | undefined,
   seen: WeakMap<object, unknown>,
   forceConfigContainer = false,
 ): unknown {
@@ -46,7 +46,7 @@ function cloneConfigValue(
 
   // These values are service/plugin instances rather than config containers.
   // Keep their identity while still copying the arrays that contain plugins.
-  if (key && configIdentityKeys.has(key)) {
+  if (typeof key === 'string' && configIdentityKeys.has(key)) {
     return value
   }
 
@@ -91,12 +91,15 @@ function cloneConfigValue(
     return existing
   }
 
-  const configObject = value as Record<string, unknown>
-  const cloned: Record<string, unknown> = Object.create(
+  const configObject = value as Record<PropertyKey, unknown>
+  const cloned: Record<PropertyKey, unknown> = Object.create(
     Object.getPrototypeOf(value),
   )
   seen.set(value, cloned)
-  for (const property of Object.keys(configObject)) {
+  for (const property of Reflect.ownKeys(configObject)) {
+    if (!Object.getOwnPropertyDescriptor(configObject, property)?.enumerable) {
+      continue
+    }
     cloned[property] = cloneConfigValue(configObject[property], property, seen)
   }
   return cloned
