@@ -87,12 +87,13 @@ function cloneConfigValue(
     return existing
   }
 
+  const configObject = value as Record<string, unknown>
   const cloned: Record<string, unknown> = Object.create(
     Object.getPrototypeOf(value),
   )
   seen.set(value, cloned)
-  for (const property of Object.keys(value)) {
-    cloned[property] = cloneConfigValue(value[property], property, seen)
+  for (const property of Object.keys(configObject)) {
+    cloned[property] = cloneConfigValue(configObject[property], property, seen)
   }
   return cloned
 }
