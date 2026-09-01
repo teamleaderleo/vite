@@ -34,6 +34,7 @@ function cloneConfigValue(
   value: unknown,
   key: string | undefined,
   seen: WeakMap<object, unknown>,
+  forceConfigContainer = false,
 ): unknown {
   if (value === null || typeof value !== 'object') {
     return value
@@ -70,10 +71,14 @@ function cloneConfigValue(
   }
 
   // Buffers, URLs, HTTP servers/agents, class instances, and other opaque
-  // user values keep their identity. Vite may read them, but resolving config
-  // should not turn them into plain objects or reject them merely to isolate
-  // the mutable config containers around them.
-  if (!isPlainConfigObject(value)) {
+  // nested user values keep their identity. The root value is known to be the
+  // config container itself, so copy its enumerable fields even if a caller
+  // supplied it through a custom prototype.
+  if (
+    !isPlainConfigObject(value) &&
+    (!forceConfigContainer ||
+      Object.prototype.toString.call(value) !== '[object Object]')
+  ) {
     return value
   }
 
@@ -101,5 +106,5 @@ function cloneConfigValue(
  * as plain objects.
  */
 export function cloneConfig<T>(config: T): T {
-  return cloneConfigValue(config, undefined, new WeakMap()) as T
+  return cloneConfigValue(config, undefined, new WeakMap(), true) as T
 }
