@@ -122,6 +122,29 @@ test('prototype preserves identity-bearing config values', async () => {
   expect(resolved.server.ws?.server).toBe(wsServer)
 })
 
+test('prototype preserves identity of config values created by plugin hooks', async () => {
+  const pluginOwned = { state: 0 }
+  const inlineConfig: InlineConfig = {
+    configFile: false,
+    logLevel: 'silent',
+    plugins: [
+      {
+        name: 'test:prototype-plugin-owned-config',
+        config() {
+          return { custom: pluginOwned } as InlineConfig
+        },
+      },
+    ],
+  }
+
+  const resolved = await resolveClonedConfig(inlineConfig)
+  const resolvedWithCustom = resolved as typeof resolved & {
+    custom: typeof pluginOwned
+  }
+
+  expect(resolvedWithCustom.custom).toBe(pluginOwned)
+})
+
 test('prototype keeps repeated resolution idempotent', async () => {
   const optimizerPlugin = { name: 'test:prototype-idempotence' }
   const inlineConfig: InlineConfig = {
