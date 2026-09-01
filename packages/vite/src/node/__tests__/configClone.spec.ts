@@ -33,7 +33,9 @@ test('copies plugin arrays while retaining plugin objects', () => {
   const plainPlugin = { name: 'test:plain-plugin' }
   class ClassPlugin {
     name = 'test:class-plugin'
-    config() {}
+    config() {
+      return undefined
+    }
   }
   const classPlugin = new ClassPlugin()
   const nestedPlugins = [classPlugin]
@@ -57,8 +59,22 @@ test('copies plugin arrays while retaining plugin objects', () => {
 
 test('retains opaque values and service-object identity', () => {
   const binary = Buffer.from([1, 2, 3])
-  const logger = { info() {}, warn() {}, error() {} }
-  const customResolver = { resolveId() {} }
+  const logger = {
+    info() {
+      return undefined
+    },
+    warn() {
+      return undefined
+    },
+    error() {
+      return undefined
+    },
+  }
+  const customResolver = {
+    resolveId() {
+      return null
+    },
+  }
   class CustomValue {
     value = 1
   }
@@ -132,7 +148,9 @@ test('existing deepClone clones plain custom logger identity', () => {
 test('existing deepClone flattens class-based plugins', () => {
   class ClassPlugin {
     name = 'test:class-plugin'
-    config() {}
+    config() {
+      return undefined
+    }
   }
   const plugin = new ClassPlugin()
   const cloned = deepClone({ plugins: [plugin] })
