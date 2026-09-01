@@ -13,6 +13,20 @@ test('clones mutable config containers', () => {
   expect(config.resolve.conditions).toEqual(['source'])
 })
 
+test('clones a custom-prototype config root without flattening its prototype', () => {
+  class Config {
+    logLevel = 'silent'
+    resolve = { conditions: ['source'] }
+  }
+
+  const config = new Config()
+  const cloned = cloneConfig(config)
+
+  expect(cloned).not.toBe(config)
+  expect(cloned).toBeInstanceOf(Config)
+  expect(cloned.resolve).not.toBe(config.resolve)
+})
+
 test('copies plugin arrays while retaining plugin objects', () => {
   const plainPlugin = { name: 'test:plain-plugin' }
   class ClassPlugin {
