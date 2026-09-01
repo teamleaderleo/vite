@@ -6,7 +6,7 @@ function isPlainConfigObject(value: object): value is Record<string, unknown> {
   }
 
   const prototype = Object.getPrototypeOf(value)
-  return prototype === Object.prototype || prototype === null
+  return prototype === Object.prototype || prototype == null
 }
 
 function clonePluginOption(
@@ -36,7 +36,7 @@ function cloneConfigValue(
   seen: WeakMap<object, unknown>,
   forceConfigContainer = false,
 ): unknown {
-  if (value === null || typeof value !== 'object') {
+  if (value == null || typeof value !== 'object') {
     return value
   }
 
