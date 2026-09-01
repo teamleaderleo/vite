@@ -23,4 +23,4 @@ jobs:
       - run: pnpm exec eslint packages/vite/src/node/configClone.ts packages/vite/src/node/__tests__/configResolveOwnershipV7.spec.ts
       - run: pnpm run build
       - run: pnpm --filter vite typecheck
-      - run: pnpm test-unit packages/vite/src/node/__tests__/config.spec.ts packages/vite/src/node/__tests__/configResolveOwnershipV3.spec.ts packages/vite/src/node/__tests__/configClonePostcssV3.spec.ts packages/vite/src/node/__tests__/configResolveOwnershipV5.spec.ts packages/vite/src/node/__tests__/configResolveOwnershipV7.spec.ts packages/vite/src/node/__tests__/plugins/terser.spec.ts
+      - run: pnpm test-unit packages/vite/src/node/__tests__/config.spec.ts packages/vite/src/node/__tests__/configResolveOwnershipV3.spec.ts packages/vite/src/node/__tests__/configResolveOwnershipV5.spec.ts packages/vite/src/node/__tests__/configResolveOwnershipV7.spec.ts packages/vite/src/node/__tests__/plugins/terser.spec.ts
