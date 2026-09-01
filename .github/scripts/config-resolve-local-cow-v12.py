@@ -90,7 +90,9 @@ replace_once(
   Object.freeze(optimizerPlugins)
   const esbuildPlugin = {
     name: 'test:esbuild-compat',
-    setup() {},
+    setup(build: unknown) {
+      void build
+    },
   }
   const inlineConfig: InlineConfig = {
     configFile: false,
