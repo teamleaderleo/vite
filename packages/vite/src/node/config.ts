@@ -51,6 +51,7 @@ import {
   resolveBuildEnvironmentOptions,
   resolveBuilderOptions,
 } from './build'
+import { cloneConfigForResolve } from './configClone'
 import {
   CLIENT_ENTRY,
   DEFAULT_ASSETS_RE,
@@ -1464,7 +1465,7 @@ export async function resolveConfig(
   /** @internal */
   patchPlugins: ((resolvedPlugins: Plugin[]) => void) | undefined = undefined,
 ): Promise<ResolvedConfig> {
-  let config = inlineConfig
+  let config = cloneConfigForResolve(inlineConfig)
   config.build ??= {}
   setupRollupOptionCompat(config.build, 'build')
   config.worker ??= {}
