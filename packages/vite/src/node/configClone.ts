@@ -1,4 +1,8 @@
-const configIdentityKeys = new Set(['customLogger', 'customResolver'])
+const configIdentityKeys = new Set([
+  'customLogger',
+  'customResolver',
+  'nameCache',
+])
 
 function isPlainConfigObject(value: object): value is Record<string, unknown> {
   if (Object.prototype.toString.call(value) !== '[object Object]') {
