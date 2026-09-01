@@ -6,12 +6,15 @@ function cloneOptionObject<T extends object>(value: T): T {
   return Object.assign(Object.create(Object.getPrototypeOf(value)), value)
 }
 
-function cloneRolldownOptionsForResolve<T extends RolldownOptions>(options: T): T {
+function cloneRolldownOptionsForResolve<T extends RolldownOptions>(
+  options: T,
+): T {
   const cloned = cloneOptionObject(options)
 
   if (options.resolve) cloned.resolve = cloneOptionObject(options.resolve)
   if (options.transform) cloned.transform = cloneOptionObject(options.transform)
-  if (options.moduleTypes) cloned.moduleTypes = cloneOptionObject(options.moduleTypes)
+  if (options.moduleTypes)
+    cloned.moduleTypes = cloneOptionObject(options.moduleTypes)
 
   if (options.output && !Array.isArray(options.output)) {
     cloned.output = cloneOptionObject(options.output)
@@ -27,9 +30,9 @@ function cloneRolldownOptionsForResolve<T extends RolldownOptions>(options: T): 
   return cloned
 }
 
-function cloneDepOptimizationOptionsForResolve<T extends DepOptimizationOptions>(
-  options: T,
-): T {
+function cloneDepOptimizationOptionsForResolve<
+  T extends DepOptimizationOptions,
+>(options: T): T {
   const cloned = cloneOptionObject(options)
 
   if (options.esbuildOptions) {
@@ -52,9 +55,9 @@ function cloneDepOptimizationOptionsForResolve<T extends DepOptimizationOptions>
   return cloned
 }
 
-function cloneEnvironmentForResolve<T extends NonNullable<
-  InlineConfig['environments']
->[string]>(environment: T): T {
+function cloneEnvironmentForResolve<
+  T extends NonNullable<InlineConfig['environments']>[string],
+>(environment: T): T {
   const cloned = cloneOptionObject(environment)
 
   if (environment.dev) cloned.dev = cloneOptionObject(environment.dev)
