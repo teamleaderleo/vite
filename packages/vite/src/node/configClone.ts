@@ -158,6 +158,8 @@ function isPreservedObjectPath(rawPath: readonly PropertyKey[]): boolean {
   if (
     isPath(path, 'css', 'preprocessorOptions', 'scss', 'logger') ||
     isPath(path, 'css', 'preprocessorOptions', 'sass', 'logger') ||
+    isPath(path, 'css', 'preprocessorOptions', 'scss', 'importer') ||
+    isPath(path, 'css', 'preprocessorOptions', 'sass', 'importer') ||
     isSassImporterLeaf(path)
   ) {
     return true
