@@ -46,10 +46,7 @@ function cloneConfigValue(
 
   // These values are service/plugin instances rather than config containers.
   // Keep their identity while still copying the arrays that contain plugins.
-  if (
-    typeof key === 'string' &&
-    configIdentityKeys.has(key)
-  ) {
+  if (typeof key === 'string' && configIdentityKeys.has(key)) {
     return value
   }
 
@@ -100,9 +97,10 @@ function cloneConfigValue(
   )
   seen.set(value, cloned)
   for (const property of Reflect.ownKeys(configObject)) {
-    if (Object.prototype.propertyIsEnumerable.call(configObject, property)) {
-      cloned[property] = cloneConfigValue(configObject[property], property, seen)
+    if (!Object.getOwnPropertyDescriptor(configObject, property)?.enumerable) {
+      continue
     }
+    cloned[property] = cloneConfigValue(configObject[property], property, seen)
   }
   return cloned
 }
