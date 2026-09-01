@@ -1453,6 +1453,50 @@ export function isResolvedConfig(
   )
 }
 
+function cloneConfigForResolve<T>(value: T, key?: string): T {
+  // Plugin objects are executable stateful values. Copy their containers while
+  // preserving the plugin object identities used by the ecosystem.
+  if (key === 'plugins') {
+    if (Array.isArray(value)) {
+      return value.map((plugin) =>
+        Array.isArray(plugin)
+          ? cloneConfigForResolve(plugin, 'plugins')
+          : plugin,
+      ) as T
+    }
+    return value
+  }
+
+  // Custom loggers are executable stateful values too.
+  if (key === 'customLogger') {
+    return value
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => cloneConfigForResolve(item)) as T
+  }
+
+  if (value && typeof value === 'object') {
+    const prototype = Object.getPrototypeOf(value)
+    if (prototype !== Object.prototype && prototype !== null) {
+      // Keep opaque runtime values such as HTTP servers, Buffers, Agents,
+      // Maps, Sets, and other class instances by reference.
+      return value
+    }
+
+    const cloned = Object.create(prototype) as Record<string, unknown>
+    for (const property of Object.keys(value)) {
+      cloned[property] = cloneConfigForResolve(
+        (value as Record<string, unknown>)[property],
+        property,
+      )
+    }
+    return cloned as T
+  }
+
+  return value
+}
+
 export async function resolveConfig(
   inlineConfig: InlineConfig,
   command: 'build' | 'serve',
@@ -1464,7 +1508,7 @@ export async function resolveConfig(
   /** @internal */
   patchPlugins: ((resolvedPlugins: Plugin[]) => void) | undefined = undefined,
 ): Promise<ResolvedConfig> {
-  let config = inlineConfig
+  let config = cloneConfigForResolve(inlineConfig)
   config.build ??= {}
   setupRollupOptionCompat(config.build, 'build')
   config.worker ??= {}
@@ -1547,18 +1591,6 @@ export async function resolveConfig(
   // run config hooks
   const userPlugins = [...prePlugins, ...normalPlugins, ...postPlugins]
   config = await runConfigHook(config, userPlugins, configEnv)
-
-  // Resolver-generated environment defaults must not be written back into
-  // the inline config reused by server.restart().
-  config = {
-    ...config,
-    environments: Object.fromEntries(
-      Object.entries(config.environments ?? {}).map(([name, environment]) => [
-        name,
-        environment ? { ...environment } : environment,
-      ]),
-    ),
-  }
 
   // Ensure default client and ssr environments
   // If there are present, ensure order { client, ssr, ...custom }
