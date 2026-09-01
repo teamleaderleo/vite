@@ -195,7 +195,7 @@ function cloneConfigValue(
 
   const cloned: Record<PropertyKey, unknown> | unknown[] = Array.isArray(value)
     ? new Array(value.length)
-    : Object.create(Object.getPrototypeOf(value) === null ? null : Object.prototype)
+    : Object.create(Object.getPrototypeOf(value) ? Object.prototype : null)
 
   if (!Array.isArray(value) && !isPlainConfigObject(value) && !isRoot) {
     return value
