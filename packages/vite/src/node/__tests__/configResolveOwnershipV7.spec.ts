@@ -84,3 +84,31 @@ test('isolates Sass function maps while preserving callback identity', async () 
     (resolved.css.preprocessorOptions?.scss as any).functions['sum($a, $b)'],
   ).toBe(sum)
 })
+
+test('preserves Sass string importer identity', async () => {
+  const importer = {
+    calls: 0,
+    canonicalize() {
+      this.calls++
+      return null
+    },
+    load() {
+      return null
+    },
+  }
+  const scss: any = { importer }
+  const resolved = await resolveConfig(
+    {
+      configFile: false,
+      logLevel: 'silent',
+      css: { preprocessorOptions: { scss } },
+    },
+    'serve',
+  )
+
+  const resolvedImporter = (resolved.css.preprocessorOptions?.scss as any)
+    .importer as typeof importer
+  expect(resolvedImporter).toBe(importer)
+  resolvedImporter.canonicalize()
+  expect(importer.calls).toBe(1)
+})
