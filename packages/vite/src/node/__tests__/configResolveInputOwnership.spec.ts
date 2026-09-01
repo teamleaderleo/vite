@@ -17,6 +17,41 @@ test('does not write resolver working state into the caller inline config', asyn
   })
 })
 
+test('does not install rollup compatibility state on caller options', async () => {
+  const rollupOptions = {}
+  const optimizeDeps = { rollupOptions }
+  const inlineConfig: InlineConfig = {
+    configFile: false,
+    logLevel: 'silent',
+    optimizeDeps,
+  }
+
+  await resolveConfig(inlineConfig, 'serve')
+
+  const rollupDescriptor = Object.getOwnPropertyDescriptor(
+    optimizeDeps,
+    'rollupOptions',
+  )
+  expect(rollupDescriptor?.get).toBeUndefined()
+  expect(rollupDescriptor?.value).toBe(rollupOptions)
+  expect(inlineConfig.optimizeDeps?.rolldownOptions).toBeUndefined()
+})
+
+test('does not install hmr compatibility accessors on caller server config', async () => {
+  const hmr = { host: 'example.test' }
+  const inlineConfig: InlineConfig = {
+    configFile: false,
+    logLevel: 'silent',
+    server: { hmr },
+  }
+
+  await resolveConfig(inlineConfig, 'serve')
+
+  const hostDescriptor = Object.getOwnPropertyDescriptor(hmr, 'host')
+  expect(hostDescriptor?.get).toBeUndefined()
+  expect(hostDescriptor?.value).toBe('example.test')
+})
+
 test('does not expose caller-owned nested config to direct config-hook mutation', async () => {
   const conditions = ['source']
   const inlineConfig: InlineConfig = {
