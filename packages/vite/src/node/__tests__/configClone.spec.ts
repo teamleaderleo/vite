@@ -109,6 +109,92 @@ test('retains opaque values and service-object identity', () => {
   expect(cloned.experimental.custom).toBe(custom)
 })
 
+test('retains imperative objects inside third-party option bags', () => {
+  const entryImporter = {
+    canonicalize() {
+      return null
+    },
+    load() {
+      return null
+    },
+  }
+  const importer = {
+    canonicalize() {
+      return null
+    },
+    load() {
+      return null
+    },
+  }
+  const sassLogger = {
+    warn() {
+      return undefined
+    },
+    debug() {
+      return undefined
+    },
+  }
+  const postcssSyntax = {
+    parse() {
+      return undefined
+    },
+    stringify() {
+      return undefined
+    },
+  }
+  const lightningVisitor = {
+    Declaration() {
+      return undefined
+    },
+  }
+  const unrelatedLogger = {
+    warn() {
+      return undefined
+    },
+  }
+  const config = {
+    css: {
+      preprocessorOptions: {
+        scss: {
+          importer: entryImporter,
+          importers: [importer],
+          logger: sassLogger,
+        },
+      },
+      postcss: {
+        parser: postcssSyntax,
+        stringifier: postcssSyntax,
+        syntax: postcssSyntax,
+      },
+      lightningcss: {
+        visitor: lightningVisitor,
+      },
+    },
+    custom: {
+      logger: unrelatedLogger,
+    },
+  }
+
+  const cloned = cloneConfig(config)
+
+  expect(cloned.css).not.toBe(config.css)
+  expect(cloned.css.preprocessorOptions).not.toBe(config.css.preprocessorOptions)
+  expect(cloned.css.preprocessorOptions.scss).not.toBe(
+    config.css.preprocessorOptions.scss,
+  )
+  expect(cloned.css.preprocessorOptions.scss.importers).not.toBe(
+    config.css.preprocessorOptions.scss.importers,
+  )
+  expect(cloned.css.preprocessorOptions.scss.importer).toBe(entryImporter)
+  expect(cloned.css.preprocessorOptions.scss.importers[0]).toBe(importer)
+  expect(cloned.css.preprocessorOptions.scss.logger).toBe(sassLogger)
+  expect(cloned.css.postcss.parser).toBe(postcssSyntax)
+  expect(cloned.css.postcss.stringifier).toBe(postcssSyntax)
+  expect(cloned.css.postcss.syntax).toBe(postcssSyntax)
+  expect(cloned.css.lightningcss.visitor).toBe(lightningVisitor)
+  expect(cloned.custom.logger).not.toBe(unrelatedLogger)
+})
+
 test('copies enumerable symbol config fields', () => {
   const extension = Symbol('extension')
   const config = { [extension]: { values: ['source'] } }
