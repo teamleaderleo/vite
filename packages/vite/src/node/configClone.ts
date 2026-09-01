@@ -1,46 +1,64 @@
-const viteConfigRootKeys = new Set([
+const topLevelConfigContainers = new Set([
   'input',
   'define',
   'resolve',
-  'consumer',
-  'keepProcessEnv',
   'optimizeDeps',
-  'isBundled',
   'dev',
   'build',
-  'root',
-  'base',
-  'publicDir',
-  'cacheDir',
-  'mode',
   'plugins',
   'html',
   'css',
   'json',
   'esbuild',
   'oxc',
-  'assetsInclude',
   'builder',
   'server',
   'preview',
   'experimental',
   'future',
   'legacy',
-  'logLevel',
-  'customLogger',
-  'clearScreen',
-  'envDir',
-  'envPrefix',
   'worker',
   'ssr',
   'environments',
-  'appType',
   'devtools',
-  'configFile',
-  'configLoader',
-  'envFile',
-  'forceOptimizeDeps',
 ])
+
+const behaviorContainerPaths = [
+  'resolve.alias',
+  'build.modulePreload',
+  'build.lib',
+  'build.terserOptions',
+  'build.rolldownOptions',
+  'build.rollupOptions',
+  'build.watch',
+  'worker.rolldownOptions',
+  'worker.rollupOptions',
+  'optimizeDeps.esbuildOptions',
+  'optimizeDeps.rolldownOptions',
+  'optimizeDeps.rollupOptions',
+  'css.modules',
+  'css.postcss',
+  'css.lightningcss',
+  'css.preprocessorOptions.scss',
+  'css.preprocessorOptions.sass',
+  'css.preprocessorOptions.less',
+  'css.preprocessorOptions.styl',
+  'css.preprocessorOptions.stylus',
+  'server.hmr',
+  'server.ws',
+  'server.watch',
+  'server.https',
+  'server.cors',
+  'server.proxy',
+  'server.forwardConsole',
+  'preview.hmr',
+  'preview.ws',
+  'preview.watch',
+  'preview.https',
+  'preview.cors',
+  'preview.proxy',
+  'preview.forwardConsole',
+]
 
 const pluginCollectionPaths = new Set([
   'plugins',
@@ -122,7 +140,6 @@ function isPreservedObjectPath(rawPath: readonly PropertyKey[]): boolean {
   const withoutIndexes = pathWithoutArrayIndexes(path)
 
   if (isPath(path, 'customLogger')) return true
-
   if (withoutIndexes === 'resolve.alias.customResolver') return true
 
   if (
@@ -151,7 +168,6 @@ function isPreservedObjectPath(rawPath: readonly PropertyKey[]): boolean {
     isPath(path, 'css', 'postcss', 'syntax') ||
     isPath(path, 'css', 'postcss', 'parser') ||
     isPath(path, 'css', 'postcss', 'stringifier') ||
-    isPath(path, 'css', 'postcss', 'map', 'prev') ||
     isPath(path, 'css', 'lightningcss', 'visitor')
   ) {
     return true
@@ -188,9 +204,23 @@ function hasOwnBehavior(value: object): boolean {
   return false
 }
 
-function isViteConfigSubtree(rawPath: readonly PropertyKey[]): boolean {
-  if (rawPath.length === 0 || rawPath[0] === 'environments') return true
-  return typeof rawPath[0] === 'string' && viteConfigRootKeys.has(rawPath[0])
+function isBehaviorConfigContainer(rawPath: readonly PropertyKey[]): boolean {
+  const path = normalizeConfigPath(rawPath)
+  if (
+    path.length === 1 &&
+    typeof path[0] === 'string' &&
+    topLevelConfigContainers.has(path[0])
+  ) {
+    return true
+  }
+
+  const withoutIndexes = pathWithoutArrayIndexes(path)
+  if (!withoutIndexes) return false
+  return behaviorContainerPaths.some(
+    (containerPath) =>
+      withoutIndexes === containerPath ||
+      withoutIndexes.startsWith(`${containerPath}.`),
+  )
 }
 
 function shouldPreserveObject(
@@ -204,10 +234,11 @@ function shouldPreserveObject(
   const isPlain = isPlainConfigObject(value)
   if (!isPlain) return true
 
-  // Unknown plugin-defined config can itself be a service object. Vite-owned
-  // config subtrees are data containers by default, even when they contain
-  // callback functions (for example proxy, PostCSS map, or bundler options).
-  return !isViteConfigSubtree(path) && hasOwnBehavior(value)
+  // Plain objects with behavior are ambiguous: they may be service objects, or
+  // option bags that happen to contain callbacks. Only known callback-bearing
+  // config containers are detached; unknown behavior-bearing objects retain
+  // identity so plugin-augmented config can carry arbitrary services safely.
+  return hasOwnBehavior(value) && !isBehaviorConfigContainer(path)
 }
 
 function collectPreservedObjects(
@@ -308,11 +339,9 @@ function cloneConfigValue(
 /**
  * Create the mutable working config used by `resolveConfig`.
  *
- * Vite configuration subtrees are detached from the caller input while plugin,
- * service, runtime, and mutable state values retain identity. Unknown
- * plugin-defined behavior-bearing values are also retained because arbitrary
- * JavaScript services cannot be cloned faithfully. If one object is reachable
- * through both kinds of paths, identity preservation wins.
+ * Mutable config containers are detached from the caller input while plugins,
+ * services, runtime objects, and mutable state values retain identity. If one
+ * object is reachable through both kinds of paths, identity preservation wins.
  */
 export function cloneConfigForResolve<T>(config: T): T {
   const preserved = new WeakSet<object>()
