@@ -1359,6 +1359,7 @@ function setupRollupOptionCompatForEnvironment(environment: any): any {
   }
   const merged: Record<string, any> = { ...environment }
   if (isObject(merged.build)) {
+    merged.build = { ...merged.build }
     setupRollupOptionCompat(merged.build, 'build')
   }
   return merged

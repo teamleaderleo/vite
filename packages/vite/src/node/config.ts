@@ -1439,12 +1439,16 @@ function applyDepOptimizationOptionCompat(resolvedConfig: ResolvedConfig) {
     resolvedConfig.optimizeDeps.esbuildOptions.plugins.length > 0
   ) {
     resolvedConfig.optimizeDeps.rolldownOptions ??= {}
-    resolvedConfig.optimizeDeps.rolldownOptions.plugins ||= []
-    ;(resolvedConfig.optimizeDeps.rolldownOptions.plugins as any[]).push(
+    const plugins =
+      (
+        resolvedConfig.optimizeDeps.rolldownOptions.plugins as any[] | undefined
+      )?.slice() ?? []
+    plugins.push(
       ...resolvedConfig.optimizeDeps.esbuildOptions.plugins.map((plugin) =>
         convertEsbuildPluginToRolldownPlugin(plugin),
       ),
     )
+    resolvedConfig.optimizeDeps.rolldownOptions.plugins = plugins
   }
 }
 
