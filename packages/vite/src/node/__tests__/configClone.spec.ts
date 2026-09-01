@@ -39,15 +39,25 @@ test('copies plugin arrays while retaining plugin objects', () => {
   expect(cloned.optimizeDeps.rolldownOptions.plugins[0]).toBe(plainPlugin)
 })
 
-test('retains opaque user values and custom logger identity', () => {
+test('retains opaque values and service-object identity', () => {
   const binary = Buffer.from([1, 2, 3])
   const logger = { info() {}, warn() {}, error() {} }
+  const customResolver = { resolveId() {} }
   class CustomValue {
     value = 1
   }
   const custom = new CustomValue()
   const config = {
     customLogger: logger,
+    resolve: {
+      alias: [
+        {
+          find: 'source',
+          replacement: 'replacement',
+          customResolver,
+        },
+      ],
+    },
     server: { https: { cert: binary } },
     experimental: { custom },
   }
@@ -55,6 +65,9 @@ test('retains opaque user values and custom logger identity', () => {
   const cloned = cloneConfig(config)
 
   expect(cloned.customLogger).toBe(logger)
+  expect(cloned.resolve.alias).not.toBe(config.resolve.alias)
+  expect(cloned.resolve.alias[0]).not.toBe(config.resolve.alias[0])
+  expect(cloned.resolve.alias[0].customResolver).toBe(customResolver)
   expect(cloned.server).not.toBe(config.server)
   expect(cloned.server.https).not.toBe(config.server.https)
   expect(cloned.server.https.cert).toBe(binary)
