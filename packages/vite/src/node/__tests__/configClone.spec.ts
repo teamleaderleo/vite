@@ -15,6 +15,15 @@ test('clones mutable config containers', () => {
   expect(config.resolve.conditions).toEqual(['source'])
 })
 
+test('clones enumerable symbol config extensions', () => {
+  const extension = Symbol('plugin-config')
+  const config = { [extension]: { enabled: true } }
+  const cloned = cloneConfig(config)
+
+  expect(cloned[extension]).toEqual({ enabled: true })
+  expect(cloned[extension]).not.toBe(config[extension])
+})
+
 test('clones a custom-prototype config root without flattening its prototype', () => {
   class Config {
     logLevel = 'silent'
