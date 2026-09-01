@@ -163,11 +163,11 @@ function isConfigContainer(rawPath: readonly PropertyKey[]): boolean {
 }
 
 function isPreservedState(rawPath: readonly PropertyKey[]): boolean {
-  const path = normalizeConfigPath(rawPath)
-  return (
-    isPath(path, 'build', 'terserOptions', 'nameCache') ||
-    isPath(path, 'esbuild', 'mangleCache') ||
-    isPath(path, 'optimizeDeps', 'esbuildOptions', 'mangleCache')
+  return isPath(
+    normalizeConfigPath(rawPath),
+    'build',
+    'terserOptions',
+    'nameCache',
   )
 }
 
