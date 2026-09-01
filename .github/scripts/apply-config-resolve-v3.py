@@ -4,9 +4,7 @@ clone = r'''function preserveObject(
   preserved: WeakSet<object>,
   value: unknown,
 ): void {
-  if (value != null && typeof value === 'object') {
-    preserved.add(value)
-  }
+  if (value != null && typeof value === 'object') preserved.add(value)
 }
 
 function preservePluginOptions(
@@ -20,49 +18,74 @@ function preservePluginOptions(
   }
 }
 
-function preserveBuildOptions(
+function preserveBundlerPlugins(
+  preserved: WeakSet<object>,
+  options: any,
+): void {
+  if (!options || typeof options !== 'object') return
+  preservePluginOptions(preserved, options.plugins)
+  const outputs = Array.isArray(options.output)
+    ? options.output
+    : [options.output]
+  for (const output of outputs) {
+    preservePluginOptions(preserved, output?.plugins)
+  }
+}
+
+function preserveTerserServices(
+  preserved: WeakSet<object>,
+  build: any,
+): void {
+  const terser = build?.terserOptions
+  if (!terser || typeof terser !== 'object') return
+  preserveObject(preserved, terser.nameCache)
+  if (terser.mangle && typeof terser.mangle === 'object') {
+    preserveObject(preserved, terser.mangle.nth_identifier)
+    if (
+      terser.mangle.properties &&
+      typeof terser.mangle.properties === 'object'
+    ) {
+      preserveObject(preserved, terser.mangle.properties.nth_identifier)
+    }
+  }
+}
+
+function preserveBuildServices(
   preserved: WeakSet<object>,
   build: any,
 ): void {
   if (!build || typeof build !== 'object') return
-  preserveObject(preserved, build.terserOptions)
-  preserveObject(preserved, build.rollupOptions)
-  preserveObject(preserved, build.rolldownOptions)
-  preserveObject(preserved, build.commonjsOptions)
-  preserveObject(preserved, build.dynamicImportVarsOptions)
-  preserveObject(preserved, build.watch)
+  preserveTerserServices(preserved, build)
+  preserveBundlerPlugins(preserved, build.rolldownOptions)
+  preserveBundlerPlugins(preserved, build.rollupOptions)
 }
 
-function preserveOptimizeDepsOptions(
+function preserveOptimizeDepsServices(
   preserved: WeakSet<object>,
   optimizeDeps: any,
 ): void {
   if (!optimizeDeps || typeof optimizeDeps !== 'object') return
-  preserveObject(preserved, optimizeDeps.esbuildOptions)
-  preserveObject(preserved, optimizeDeps.rollupOptions)
-  preserveObject(preserved, optimizeDeps.rolldownOptions)
+  preservePluginOptions(preserved, optimizeDeps.esbuildOptions?.plugins)
+  preserveBundlerPlugins(preserved, optimizeDeps.rolldownOptions)
+  preserveBundlerPlugins(preserved, optimizeDeps.rollupOptions)
 }
 
-function preserveCssOptions(
+function preserveCssServices(
   preserved: WeakSet<object>,
   css: any,
 ): void {
   if (!css || typeof css !== 'object') return
-  preserveObject(preserved, css.modules)
-  preserveObject(preserved, css.preprocessorOptions)
-  preserveObject(preserved, css.postcss)
-  preserveObject(preserved, css.lightningcss)
-}
+  preservePluginOptions(preserved, css.postcss?.plugins)
+  preservePluginOptions(preserved, css.preprocessorOptions?.less?.plugins)
 
-function preserveServerOptions(
-  preserved: WeakSet<object>,
-  server: any,
-): void {
-  if (!server || typeof server !== 'object') return
-  preserveObject(preserved, server.https)
-  preserveObject(preserved, server.proxy)
-  preserveObject(preserved, server.cors)
-  preserveObject(preserved, server.watch)
+  for (const lang of ['scss', 'sass']) {
+    const options = css.preprocessorOptions?.[lang]
+    if (!options || typeof options !== 'object') continue
+    preservePluginOptions(preserved, options.importers)
+    preserveObject(preserved, options.logger)
+  }
+
+  preserveObject(preserved, css.lightningcss?.visitor)
 }
 
 function preserveAliasResolvers(
@@ -75,32 +98,29 @@ function preserveAliasResolvers(
   }
 }
 
+function preserveEnvironmentServices(
+  preserved: WeakSet<object>,
+  environment: any,
+): void {
+  if (!environment || typeof environment !== 'object') return
+  preserveBuildServices(preserved, environment.build)
+  preserveOptimizeDepsServices(preserved, environment.optimizeDeps)
+}
+
 function collectIdentityValues(config: any): WeakSet<object> {
   const preserved = new WeakSet<object>()
 
   preservePluginOptions(preserved, config?.plugins)
   preserveObject(preserved, config?.customLogger)
-  preserveObject(preserved, config?.esbuild)
-  preserveObject(preserved, config?.oxc)
-  preserveObject(preserved, config?.devtools)
-  preserveBuildOptions(preserved, config?.build)
-  preserveOptimizeDepsOptions(preserved, config?.optimizeDeps)
-  preserveCssOptions(preserved, config?.css)
-  preserveServerOptions(preserved, config?.server)
-  preserveServerOptions(preserved, config?.preview)
   preserveAliasResolvers(preserved, config?.resolve)
-
-  if (config?.worker && typeof config.worker === 'object') {
-    preserveObject(preserved, config.worker.rollupOptions)
-    preserveObject(preserved, config.worker.rolldownOptions)
-  }
-
-  preserveOptimizeDepsOptions(preserved, config?.ssr?.optimizeDeps)
+  preserveBuildServices(preserved, config?.build)
+  preserveOptimizeDepsServices(preserved, config?.optimizeDeps)
+  preserveOptimizeDepsServices(preserved, config?.ssr?.optimizeDeps)
+  preserveCssServices(preserved, config?.css)
 
   if (config?.environments && typeof config.environments === 'object') {
     for (const environment of Object.values<any>(config.environments)) {
-      preserveBuildOptions(preserved, environment?.build)
-      preserveOptimizeDepsOptions(preserved, environment?.optimizeDeps)
+      preserveEnvironmentServices(preserved, environment)
     }
   }
 
@@ -108,9 +128,7 @@ function collectIdentityValues(config: any): WeakSet<object> {
 }
 
 function isPlainConfigObject(value: object): boolean {
-  if (Object.prototype.toString.call(value) !== '[object Object]') {
-    return false
-  }
+  if (Object.prototype.toString.call(value) !== '[object Object]') return false
   const prototype = Object.getPrototypeOf(value)
   return prototype === Object.prototype || prototype == null
 }
@@ -127,40 +145,71 @@ function hasOwnBehavior(value: object): boolean {
   return false
 }
 
-function isViteCallbackContainer(path: readonly PropertyKey[]): boolean {
+function startsWithPath(
+  path: readonly PropertyKey[],
+  prefix: readonly string[],
+): boolean {
+  return prefix.every((part, index) => path[index] === part)
+}
+
+function normalizeEnvironmentPath(
+  path: readonly PropertyKey[],
+): readonly PropertyKey[] {
+  return path[0] === 'environments' && path.length >= 2
+    ? path.slice(2)
+    : path
+}
+
+function isConfigContainerWithCallbacks(
+  rawPath: readonly PropertyKey[],
+): boolean {
+  const path = normalizeEnvironmentPath(rawPath)
   if (path.length === 0) return true
-  if (path.length === 1) {
-    return (
-      path[0] === 'build' ||
-      path[0] === 'worker' ||
-      path[0] === 'server' ||
-      path[0] === 'builder' ||
-      path[0] === 'experimental'
-    )
-  }
+
   if (
-    path.length === 2 &&
-    path[0] === 'build' &&
-    (path[1] === 'lib' || path[1] === 'modulePreload')
+    path.length === 1 &&
+    [
+      'dev',
+      'build',
+      'resolve',
+      'worker',
+      'optimizeDeps',
+      'ssr',
+      'builder',
+      'experimental',
+    ].includes(path[0] as string)
   ) {
     return true
   }
-  if (
+
+  const callbackContainerPrefixes = [
+    ['build', 'terserOptions'],
+    ['build', 'rolldownOptions'],
+    ['build', 'rollupOptions'],
+    ['build', 'lib'],
+    ['build', 'modulePreload'],
+    ['worker', 'rolldownOptions'],
+    ['worker', 'rollupOptions'],
+    ['optimizeDeps', 'esbuildOptions'],
+    ['optimizeDeps', 'rolldownOptions'],
+    ['optimizeDeps', 'rollupOptions'],
+    ['ssr', 'optimizeDeps'],
+    ['css', 'modules'],
+    ['css', 'postcss'],
+    ['css', 'lightningcss'],
+    ['esbuild'],
+    ['oxc'],
+  ]
+  if (callbackContainerPrefixes.some((prefix) => startsWithPath(path, prefix))) {
+    return true
+  }
+
+  return (
     path.length >= 3 &&
-    path[0] === 'environments' &&
-    (path[2] === 'dev' || path[2] === 'build')
-  ) {
-    return true
-  }
-  if (
-    path.length >= 4 &&
-    path[0] === 'environments' &&
-    path[2] === 'build' &&
-    (path[3] === 'lib' || path[3] === 'modulePreload')
-  ) {
-    return true
-  }
-  return false
+    path[0] === 'css' &&
+    path[1] === 'preprocessorOptions' &&
+    ['scss', 'sass', 'less', 'styl', 'stylus'].includes(path[2] as string)
+  )
 }
 
 function cloneConfigValue(
@@ -191,11 +240,15 @@ function cloneConfigValue(
       const descriptor = Object.getOwnPropertyDescriptor(value, key)
       if (!descriptor?.enumerable) continue
       if ('value' in descriptor) {
-        cloned[key as any] = cloneConfigValue(
-          descriptor.value,
-          [...path, key],
-          preserved,
-          seen,
+        Reflect.set(
+          cloned,
+          key,
+          cloneConfigValue(
+            descriptor.value,
+            [...path, key],
+            preserved,
+            seen,
+          ),
         )
       } else {
         Object.defineProperty(cloned, key, descriptor)
@@ -208,7 +261,7 @@ function cloneConfigValue(
   if (!isPlain && !isRoot) return value
   if (
     isPlain &&
-    !isViteCallbackContainer(path) &&
+    !isConfigContainerWithCallbacks(path) &&
     hasOwnBehavior(value)
   ) {
     return value
@@ -238,10 +291,10 @@ function cloneConfigValue(
 /**
  * Create the mutable working config used by `resolveConfig`.
  *
- * Vite-owned config containers are detached from the caller input. Values
- * passed through to third-party APIs (plugins, preprocessors, bundlers,
- * minifiers, loggers, and similar services) retain their identity because
- * arbitrary JavaScript service/state objects cannot be cloned faithfully.
+ * Config containers are detached from the caller input while values that act as
+ * services or mutable state keep their identity. Arbitrary JavaScript service
+ * objects cannot be cloned faithfully, so unknown behavior-bearing objects are
+ * retained unless they are a config container Vite itself needs to modify.
  */
 export function cloneConfigForResolve<T>(config: T): T {
   return cloneConfigValue(
@@ -265,36 +318,6 @@ text = text.replace(
     '  let config = cloneConfig(inlineConfig)',
     '  let config = cloneConfigForResolve(inlineConfig)',
 )
-needle = "  setupRollupOptionCompat(merged, 'optimizeDeps')\n\n  const rolldownOptions = merged.rolldownOptions as Exclude<"
-replacement = """  setupRollupOptionCompat(merged, 'optimizeDeps')
-
-  // The optimizer normalizes a few nested third-party option containers below.
-  // Detach only those containers before writing into them so service/plugin
-  // values nested inside the option bags retain their identity.
-  merged.esbuildOptions = { ...merged.esbuildOptions }
-  merged.rolldownOptions = {
-    ...merged.rolldownOptions,
-    resolve: merged.rolldownOptions.resolve
-      ? { ...merged.rolldownOptions.resolve }
-      : undefined,
-    output: merged.rolldownOptions.output
-      ? { ...merged.rolldownOptions.output }
-      : undefined,
-    transform: merged.rolldownOptions.transform
-      ? { ...merged.rolldownOptions.transform }
-      : undefined,
-    moduleTypes: merged.rolldownOptions.moduleTypes
-      ? { ...merged.rolldownOptions.moduleTypes }
-      : undefined,
-    plugins: Array.isArray(merged.rolldownOptions.plugins)
-      ? [...merged.rolldownOptions.plugins]
-      : merged.rolldownOptions.plugins,
-  }
-
-  const rolldownOptions = merged.rolldownOptions as Exclude<"""
-if needle not in text:
-    raise SystemExit('optimizer insertion point not found')
-text = text.replace(needle, replacement, 1)
 config_path.write_text(text)
 
 tests = r'''import { expect, test } from 'vitest'
@@ -377,7 +400,7 @@ test('preserves class plugin identity', async () => {
   expect(resolved.plugins).toContain(plugin)
 })
 
-test('preserves stateful terser nth_identifier services', async () => {
+test('isolates terser options while preserving nth_identifier state', async () => {
   const nthIdentifier = {
     count: 0,
     get(n: number) {
@@ -385,19 +408,26 @@ test('preserves stateful terser nth_identifier services', async () => {
       return `x${n}`
     },
   }
-  const resolved = await resolveConfig(
-    {
-      configFile: false,
-      logLevel: 'silent',
-      build: {
-        terserOptions: {
-          mangle: { nth_identifier: nthIdentifier },
+  const terserOptions: any = {
+    mangle: { nth_identifier: nthIdentifier },
+  }
+  const inlineConfig: InlineConfig = {
+    configFile: false,
+    logLevel: 'silent',
+    build: { terserOptions },
+    plugins: [
+      {
+        name: 'test:mutate-terser-options',
+        config(config) {
+          ;(config.build!.terserOptions as any).compress = false
         },
       },
-    },
-    'build',
-  )
+    ],
+  }
 
+  const resolved = await resolveConfig(inlineConfig, 'build')
+
+  expect(terserOptions.compress).toBeUndefined()
   const resolvedNthIdentifier = resolved.build.terserOptions.mangle
     ?.nth_identifier as typeof nthIdentifier
   expect(resolvedNthIdentifier).toBe(nthIdentifier)
@@ -405,7 +435,7 @@ test('preserves stateful terser nth_identifier services', async () => {
   expect(nthIdentifier.count).toBe(1)
 })
 
-test('preserves stateful Sass importer services', async () => {
+test('isolates Sass options while preserving importer state', async () => {
   const importer = {
     calls: 0,
     canonicalize() {
@@ -416,19 +446,24 @@ test('preserves stateful Sass importer services', async () => {
       return null
     },
   }
-  const resolved = await resolveConfig(
-    {
-      configFile: false,
-      logLevel: 'silent',
-      css: {
-        preprocessorOptions: {
-          scss: { importers: [importer as any] },
+  const scss: any = { importers: [importer] }
+  const inlineConfig: InlineConfig = {
+    configFile: false,
+    logLevel: 'silent',
+    css: { preprocessorOptions: { scss } },
+    plugins: [
+      {
+        name: 'test:mutate-sass-options',
+        config(config) {
+          ;(config.css!.preprocessorOptions!.scss as any).quietDeps = true
         },
       },
-    },
-    'serve',
-  )
+    ],
+  }
 
+  const resolved = await resolveConfig(inlineConfig, 'serve')
+
+  expect(scss.quietDeps).toBeUndefined()
   const resolvedImporter = (resolved.css.preprocessorOptions?.scss as any)
     .importers[0]
   expect(resolvedImporter).toBe(importer)
@@ -436,7 +471,7 @@ test('preserves stateful Sass importer services', async () => {
   expect(importer.calls).toBe(1)
 })
 
-test('does not mutate optimizer rolldown option containers', async () => {
+test('does not mutate optimizer option containers', async () => {
   const output = {
     banner() {
       return '/* banner */'
@@ -457,20 +492,30 @@ test('does not mutate optimizer rolldown option containers', async () => {
   expect('preserveSymlinks' in esbuildOptions).toBe(false)
 })
 
-test('does not manufacture a custom-prototype root instance', async () => {
-  class Config {
-    #secret = 1
-    logLevel = 'silent' as const
-    configFile = false as const
-    getSecret() {
-      return this.#secret
-    }
+test('preserves unknown behavior-bearing service objects', async () => {
+  const service = {
+    count: 0,
+    bump() {
+      this.count++
+    },
   }
-  const inlineConfig = new Config() as InlineConfig
-  const resolved = await resolveConfig(inlineConfig, 'serve')
+  const inlineConfig = {
+    configFile: false,
+    logLevel: 'silent',
+    customService: service,
+    plugins: [
+      {
+        name: 'test:custom-service',
+        config(config: any) {
+          config.customService.bump()
+        },
+      },
+    ],
+  } satisfies InlineConfig & { customService: typeof service }
 
-  expect(resolved.inlineConfig).toBe(inlineConfig)
-  expect(resolved.inlineConfig).toBeInstanceOf(Config)
+  await resolveConfig(inlineConfig, 'serve')
+
+  expect(service.count).toBe(1)
 })
 '''
 Path('packages/vite/src/node/__tests__/configResolveOwnershipV3.spec.ts').write_text(tests)
