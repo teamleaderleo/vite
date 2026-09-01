@@ -3,7 +3,7 @@ import fs from 'node:fs'
 const file = 'packages/vite/src/node/config.ts'
 let source = fs.readFileSync(file, 'utf8')
 
-const importAnchor = "import type { HtmlAssetSource } from './assetSource'\n"
+const importAnchor = "} from './build'\n"
 const cloneImport = "import { cloneConfig } from './configClone'\n"
 
 if (!source.includes(cloneImport)) {
