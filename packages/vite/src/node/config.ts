@@ -1453,48 +1453,81 @@ export function isResolvedConfig(
   )
 }
 
-function cloneConfigForResolve<T>(value: T, key?: string): T {
-  // Plugin objects are executable stateful values. Copy their containers while
-  // preserving the plugin object identities used by the ecosystem.
-  if (key === 'plugins') {
-    if (Array.isArray(value)) {
-      return value.map((plugin) =>
-        Array.isArray(plugin)
-          ? cloneConfigForResolve(plugin, 'plugins')
-          : plugin,
-      ) as T
-    }
+const configIdentityKeys = new Set(['customLogger', 'customResolver'])
+
+function cloneConfigForResolve<T>(config: T): T {
+  return cloneConfigValue(config, undefined, new WeakMap(), true) as T
+}
+
+function cloneConfigValue(
+  value: unknown,
+  key: string | undefined,
+  seen: WeakMap<object, unknown>,
+  forceConfigContainer = false,
+): unknown {
+  if (value == null || typeof value !== 'object') {
     return value
   }
 
-  // Custom loggers are executable stateful values too.
-  if (key === 'customLogger') {
+  if (key && configIdentityKeys.has(key)) {
     return value
+  }
+
+  if (value instanceof RegExp) {
+    const cloned = new RegExp(value.source, value.flags)
+    cloned.lastIndex = value.lastIndex
+    return cloned
   }
 
   if (Array.isArray(value)) {
-    return value.map((item) => cloneConfigForResolve(item)) as T
-  }
-
-  if (value && typeof value === 'object') {
-    const prototype = Object.getPrototypeOf(value)
-    if (prototype !== Object.prototype && prototype !== null) {
-      // Keep opaque runtime values such as HTTP servers, Buffers, Agents,
-      // Maps, Sets, and other class instances by reference.
-      return value
+    const existing = seen.get(value)
+    if (existing) {
+      return existing
     }
 
-    const cloned = Object.create(prototype) as Record<string, unknown>
-    for (const property of Object.keys(value)) {
-      cloned[property] = cloneConfigForResolve(
-        (value as Record<string, unknown>)[property],
-        property,
-      )
+    const cloned: unknown[] = []
+    seen.set(value, cloned)
+    if (key === 'plugins') {
+      for (const item of value) {
+        cloned.push(
+          Array.isArray(item) ? cloneConfigValue(item, 'plugins', seen) : item,
+        )
+      }
+    } else {
+      for (const item of value) {
+        cloned.push(cloneConfigValue(item, undefined, seen))
+      }
     }
-    return cloned as T
+    return cloned
   }
 
-  return value
+  const prototype = Object.getPrototypeOf(value)
+  const isPlainConfigObject =
+    Object.prototype.toString.call(value) === '[object Object]' &&
+    (prototype === Object.prototype || prototype == null)
+  if (
+    !isPlainConfigObject &&
+    (!forceConfigContainer ||
+      Object.prototype.toString.call(value) !== '[object Object]')
+  ) {
+    return value
+  }
+
+  const existing = seen.get(value)
+  if (existing) {
+    return existing
+  }
+
+  const cloned: Record<string, unknown> = Object.create(prototype)
+  seen.set(value, cloned)
+  for (const property of Object.keys(value)) {
+    cloned[property] = cloneConfigValue(
+      (value as Record<string, unknown>)[property],
+      property,
+      seen,
+    )
+  }
+  return cloned
 }
 
 export async function resolveConfig(
