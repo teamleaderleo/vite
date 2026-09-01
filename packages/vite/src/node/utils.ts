@@ -1421,6 +1421,8 @@ export function setupHmrWsOptionCompat(
   }
   if (serverConfig.hmr === true) {
     serverConfig.hmr = {}
+  } else if (serverConfig.hmr) {
+    serverConfig.hmr = { ...serverConfig.hmr }
   }
 
   const hmrConfig = serverConfig.hmr
