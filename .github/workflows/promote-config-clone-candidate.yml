@@ -11,7 +11,7 @@ on:
 
 jobs:
   promote:
-    if: startsWith(github.event.head_commit.message, 'promote: config clone candidate')
+    if: ${{ startsWith(github.event.head_commit.message, 'promote: config clone candidate') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
