@@ -1,0 +1,26 @@
+name: Config resolve ownership v5
+
+on:
+  push:
+    branches:
+      - experiment/config-resolve-input-ownership-v5
+
+permissions: {}
+
+jobs:
+  validate:
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+      - run: |
+          corepack enable
+          corepack prepare pnpm@10.34.5 --activate
+          pnpm install --frozen-lockfile
+      - run: pnpm exec oxfmt --check packages/vite/src/node/configClone.ts packages/vite/src/node/__tests__/configResolveOwnershipV5.spec.ts
+      - run: pnpm exec eslint packages/vite/src/node/configClone.ts packages/vite/src/node/__tests__/configResolveOwnershipV5.spec.ts
+      - run: pnpm run build
+      - run: pnpm --filter vite typecheck
+      - run: pnpm test-unit packages/vite/src/node/__tests__/config.spec.ts packages/vite/src/node/__tests__/configResolveOwnershipV3.spec.ts packages/vite/src/node/__tests__/configClonePostcssV3.spec.ts packages/vite/src/node/__tests__/configResolveOwnershipV5.spec.ts packages/vite/src/node/__tests__/plugins/terser.spec.ts
