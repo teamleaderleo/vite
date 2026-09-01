@@ -3,7 +3,13 @@ import fs from 'node:fs'
 const file = 'packages/vite/src/node/config.ts'
 let source = fs.readFileSync(file, 'utf8')
 
-const importAnchor = "} from './build'\n"
+const importAnchor = `import {
+  buildEnvironmentOptionsDefaults,
+  builderOptionsDefaults,
+  resolveBuildEnvironmentOptions,
+  resolveBuilderOptions,
+} from './build'
+`
 const cloneImport = "import { cloneConfig } from './configClone'\n"
 
 if (!source.includes(cloneImport)) {
