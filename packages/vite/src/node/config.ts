@@ -1453,6 +1453,83 @@ export function isResolvedConfig(
   )
 }
 
+const configIdentityKeys = new Set(['customLogger', 'customResolver'])
+
+function cloneConfigForResolve<T>(config: T): T {
+  return cloneConfigValue(config, undefined, new WeakMap(), true) as T
+}
+
+function cloneConfigValue(
+  value: unknown,
+  key: string | undefined,
+  seen: WeakMap<object, unknown>,
+  forceConfigContainer = false,
+): unknown {
+  if (value == null || typeof value !== 'object') {
+    return value
+  }
+
+  if (key && configIdentityKeys.has(key)) {
+    return value
+  }
+
+  if (value instanceof RegExp) {
+    const cloned = new RegExp(value.source, value.flags)
+    cloned.lastIndex = value.lastIndex
+    return cloned
+  }
+
+  if (Array.isArray(value)) {
+    const existing = seen.get(value)
+    if (existing) {
+      return existing
+    }
+
+    const cloned: unknown[] = []
+    seen.set(value, cloned)
+    if (key === 'plugins') {
+      for (const item of value) {
+        cloned.push(
+          Array.isArray(item) ? cloneConfigValue(item, 'plugins', seen) : item,
+        )
+      }
+    } else {
+      for (const item of value) {
+        cloned.push(cloneConfigValue(item, undefined, seen))
+      }
+    }
+    return cloned
+  }
+
+  const prototype = Object.getPrototypeOf(value)
+  const isPlainConfigObject =
+    Object.prototype.toString.call(value) === '[object Object]' &&
+    (prototype === Object.prototype || prototype == null)
+  if (
+    !isPlainConfigObject &&
+    (!forceConfigContainer ||
+      Object.prototype.toString.call(value) !== '[object Object]')
+  ) {
+    return value
+  }
+
+  const existing = seen.get(value)
+  if (existing) {
+    return existing
+  }
+
+  const cloned: Record<string, unknown> = Object.create(prototype)
+  seen.set(value, cloned)
+  for (const property of Object.keys(value)) {
+    cloned[property] = cloneConfigValue(
+      (value as Record<string, unknown>)[property],
+      property,
+      seen,
+    )
+  }
+  return cloned
+}
+
 export async function resolveConfig(
   inlineConfig: InlineConfig,
   command: 'build' | 'serve',
@@ -1464,7 +1541,7 @@ export async function resolveConfig(
   /** @internal */
   patchPlugins: ((resolvedPlugins: Plugin[]) => void) | undefined = undefined,
 ): Promise<ResolvedConfig> {
-  let config = inlineConfig
+  let config = cloneConfigForResolve(inlineConfig)
   config.build ??= {}
   setupRollupOptionCompat(config.build, 'build')
   config.worker ??= {}
@@ -1547,18 +1624,6 @@ export async function resolveConfig(
   // run config hooks
   const userPlugins = [...prePlugins, ...normalPlugins, ...postPlugins]
   config = await runConfigHook(config, userPlugins, configEnv)
-
-  // Resolver-generated environment defaults must not be written back into
-  // the inline config reused by server.restart().
-  config = {
-    ...config,
-    environments: Object.fromEntries(
-      Object.entries(config.environments ?? {}).map(([name, environment]) => [
-        name,
-        environment ? { ...environment } : environment,
-      ]),
-    ),
-  }
 
   // Ensure default client and ssr environments
   // If there are present, ensure order { client, ssr, ...custom }
