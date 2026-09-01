@@ -1,0 +1,71 @@
+name: Config resolve clone review fix
+
+on:
+  push:
+    branches:
+      - experiment/config-resolve-clone-review-run
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experiment/config-resolve-clone-review-run
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+
+      - name: Apply reviewed clone boundary
+        shell: python
+        run: |
+          from pathlib import Path
+          import textwrap
+
+          workflow = Path('.github/workflows/config-resolve-clone-review.yml').read_text()
+          start = workflow.index('      - name: Apply reviewed clone boundary\n')
+          run_start = workflow.index('        run: |\n', start) + len('        run: |\n')
+          end = workflow.index('      - name: Install dependencies\n', run_start)
+          script = textwrap.dedent(workflow[run_start:end])
+          script = script.replace("value === null ||", "value == null ||")
+          script = script.replace("prototype === Object.prototype || prototype === null", "prototype === Object.prototype || prototype == null")
+          script = script.replace(
+              "if (!plainConfigObject && !forceConfigContainer) {",
+              "if (\\n      !plainConfigObject &&\\n      (!forceConfigContainer ||\\n        Object.prototype.toString.call(value) !== '[object Object]')\\n    ) {",
+          )
+          script = script.replace(
+              "const customResolver = { resolveId() {} }",
+              "const customResolver = { resolveId() { return null } }",
+          )
+          exec(compile(script, '<review-patch>', 'exec'))
+
+      - name: Install dependencies
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.34.5 --activate
+          pnpm install --frozen-lockfile
+
+      - name: Format experiment
+        run: pnpm exec oxfmt --write packages/vite/src/node/config.ts packages/vite/src/node/__tests__/configResolveCloneBoundary.spec.ts
+
+      - name: Build Vite bundle
+        run: pnpm --filter vite build-bundle
+
+      - name: Run focused regression tests
+        run: pnpm test-unit packages/vite/src/node/__tests__/configResolveCloneBoundary.spec.ts
+
+      - name: Commit experiment
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add packages/vite/src/node/config.ts packages/vite/src/node/__tests__/configResolveCloneBoundary.spec.ts
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "experiment: harden config resolution clone boundary"
+          git push origin HEAD:experiment/config-resolve-clone-review-run
