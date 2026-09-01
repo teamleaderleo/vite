@@ -44,6 +44,7 @@ const viteConfigRootKeys = new Set([
 
 const pluginCollectionPaths = new Set([
   'plugins',
+  'worker.plugins',
   'build.rolldownOptions.plugins',
   'build.rollupOptions.plugins',
   'build.rolldownOptions.output.plugins',
