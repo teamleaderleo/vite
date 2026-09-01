@@ -32,10 +32,10 @@ jobs:
         run: python .github/scripts/apply-config-resolve-v3.py
 
       - name: Format candidate
-        run: pnpm exec oxfmt --write packages/vite/src/node/configClone.ts packages/vite/src/node/config.ts packages/vite/src/node/__tests__/configResolveOwnershipV3.spec.ts
+        run: pnpm exec oxfmt --write packages/vite/src/node/configClone.ts packages/vite/src/node/config.ts packages/vite/src/node/__tests__/configResolveOwnershipV3.spec.ts packages/vite/src/node/__tests__/configClonePostcssV3.spec.ts
 
       - name: Lint candidate
-        run: pnpm exec eslint packages/vite/src/node/configClone.ts packages/vite/src/node/config.ts packages/vite/src/node/__tests__/configResolveOwnershipV3.spec.ts
+        run: pnpm exec eslint packages/vite/src/node/configClone.ts packages/vite/src/node/config.ts packages/vite/src/node/__tests__/configResolveOwnershipV3.spec.ts packages/vite/src/node/__tests__/configClonePostcssV3.spec.ts
 
       - name: Build repository packages
         run: pnpm run build
@@ -44,7 +44,7 @@ jobs:
         run: pnpm --filter vite typecheck
 
       - name: Run focused tests
-        run: pnpm test-unit packages/vite/src/node/__tests__/config.spec.ts packages/vite/src/node/__tests__/configResolveOwnershipV3.spec.ts packages/vite/src/node/__tests__/plugins/terser.spec.ts
+        run: pnpm test-unit packages/vite/src/node/__tests__/config.spec.ts packages/vite/src/node/__tests__/configResolveOwnershipV3.spec.ts packages/vite/src/node/__tests__/configClonePostcssV3.spec.ts packages/vite/src/node/__tests__/plugins/terser.spec.ts
 
       - name: Commit candidate
         run: |
