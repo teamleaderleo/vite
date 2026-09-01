@@ -109,6 +109,18 @@ test('retains opaque values and service-object identity', () => {
   expect(cloned.experimental.custom).toBe(custom)
 })
 
+test('copies enumerable symbol config fields', () => {
+  const extension = Symbol('extension')
+  const config = { [extension]: { values: ['source'] } }
+  const cloned = cloneConfig(config)
+
+  cloned[extension].values.push('mutated')
+
+  expect(cloned[extension]).not.toBe(config[extension])
+  expect(cloned[extension].values).not.toBe(config[extension].values)
+  expect(config[extension].values).toEqual(['source'])
+})
+
 test('mergeConfig with an empty base still shares unmatched nested config', () => {
   const config = { resolve: { conditions: ['source'] } }
   const merged = mergeConfig({}, config)
