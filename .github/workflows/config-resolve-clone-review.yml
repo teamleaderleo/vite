@@ -1,0 +1,462 @@
+name: Config resolve clone review
+
+on:
+  push:
+    branches:
+      - experiment/config-resolve-clone-review-run
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experiment/config-resolve-clone-review-run
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+
+      - name: Apply reviewed clone boundary
+        shell: python
+        run: |
+          from pathlib import Path
+
+          config_path = Path('packages/vite/src/node/config.ts')
+          text = config_path.read_text()
+
+          start = text.index('function cloneConfigForResolve<T>(')
+          end = text.index('export async function resolveConfig(', start)
+          helper = r'''const configIdentityKeys = new Set(['customLogger', 'customResolver'])
+
+          function cloneConfigForResolve<T>(config: T): T {
+            return cloneConfigValue(config, undefined, new WeakMap(), true) as T
+          }
+
+          function cloneConfigValue(
+            value: unknown,
+            key: string | undefined,
+            seen: WeakMap<object, unknown>,
+            forceConfigContainer = false,
+          ): unknown {
+            if (value === null || typeof value !== 'object') {
+              return value
+            }
+
+            if (key && configIdentityKeys.has(key)) {
+              return value
+            }
+
+            if (value instanceof RegExp) {
+              const cloned = new RegExp(value.source, value.flags)
+              cloned.lastIndex = value.lastIndex
+              return cloned
+            }
+
+            if (Array.isArray(value)) {
+              const existing = seen.get(value)
+              if (existing) {
+                return existing
+              }
+
+              const cloned: unknown[] = []
+              seen.set(value, cloned)
+              if (key === 'plugins') {
+                for (const item of value) {
+                  cloned.push(
+                    Array.isArray(item)
+                      ? cloneConfigValue(item, 'plugins', seen)
+                      : item,
+                  )
+                }
+              } else {
+                for (const item of value) {
+                  cloned.push(cloneConfigValue(item, undefined, seen))
+                }
+              }
+              return cloned
+            }
+
+            const prototype = Object.getPrototypeOf(value)
+            const plainConfigObject =
+              Object.prototype.toString.call(value) === '[object Object]' &&
+              (prototype === Object.prototype || prototype === null)
+            if (!plainConfigObject && !forceConfigContainer) {
+              return value
+            }
+
+            const existing = seen.get(value)
+            if (existing) {
+              return existing
+            }
+
+            const cloned: Record<string, unknown> = Object.create(prototype)
+            seen.set(value, cloned)
+            for (const property of Object.keys(value)) {
+              cloned[property] = cloneConfigValue(
+                (value as Record<string, unknown>)[property],
+                property,
+                seen,
+              )
+            }
+            return cloned
+          }
+
+          '''
+          text = text[:start] + helper + text[end:]
+          config_path.write_text(text)
+
+          test_path = Path(
+            'packages/vite/src/node/__tests__/configResolveCloneBoundary.spec.ts'
+          )
+          test_path.write_text(r'''import { Buffer } from 'node:buffer'
+          import { createServer as createHttpServer } from 'node:http'
+          import { expect, test } from 'vitest'
+          import type { InlineConfig } from '..'
+          import { resolveConfig } from '../config'
+          import { createLogger } from '../logger'
+
+          test('keeps resolver defaults out of the caller inline config', async () => {
+            const inlineConfig: InlineConfig = {
+              configFile: false,
+              logLevel: 'silent',
+            }
+
+            await resolveConfig(inlineConfig, 'serve')
+
+            expect(inlineConfig).toEqual({
+              configFile: false,
+              logLevel: 'silent',
+            })
+          })
+
+          test('accepts frozen caller config containers', async () => {
+            const optimizeDeps = Object.freeze({ rolldownOptions: {} })
+            const inlineConfig: InlineConfig = {
+              configFile: false,
+              logLevel: 'silent',
+              optimizeDeps,
+            }
+
+            await expect(resolveConfig(inlineConfig, 'serve')).resolves.toBeDefined()
+          })
+
+          test('keeps rollup compatibility state off caller options', async () => {
+            const rollupOptions = {}
+            const optimizeDeps = { rollupOptions }
+            const inlineConfig: InlineConfig = {
+              configFile: false,
+              logLevel: 'silent',
+              optimizeDeps,
+            }
+
+            await resolveConfig(inlineConfig, 'serve')
+
+            const descriptor = Object.getOwnPropertyDescriptor(
+              optimizeDeps,
+              'rollupOptions',
+            )
+            expect(descriptor?.get).toBeUndefined()
+            expect(descriptor?.value).toBe(rollupOptions)
+            expect(inlineConfig.optimizeDeps?.rolldownOptions).toBeUndefined()
+          })
+
+          test('keeps hmr compatibility accessors off caller options', async () => {
+            const hmr = { host: 'example.test' }
+            const inlineConfig: InlineConfig = {
+              configFile: false,
+              logLevel: 'silent',
+              server: { hmr },
+            }
+
+            await resolveConfig(inlineConfig, 'serve')
+
+            const descriptor = Object.getOwnPropertyDescriptor(hmr, 'host')
+            expect(descriptor?.get).toBeUndefined()
+            expect(descriptor?.value).toBe('example.test')
+          })
+
+          test('keeps config-hook mutation out of the caller inline config', async () => {
+            const inlineConfig: InlineConfig = {
+              configFile: false,
+              logLevel: 'silent',
+              resolve: {
+                conditions: ['original'],
+              },
+              plugins: [
+                {
+                  name: 'test:mutate-config-hook-input',
+                  config(config) {
+                    config.resolve!.conditions!.push('from-hook')
+                    config.define ??= {}
+                    config.define.__FROM_HOOK__ = 'true'
+                  },
+                },
+              ],
+            }
+
+            const resolved = await resolveConfig(inlineConfig, 'serve')
+
+            expect(resolved.resolve.conditions).toContain('from-hook')
+            expect(inlineConfig.resolve?.conditions).toEqual(['original'])
+            expect(inlineConfig.define).toBeUndefined()
+          })
+
+          test('keeps configResolved mutation out of custom caller fields', async () => {
+            const custom = { nested: { count: 0 } }
+            const inlineConfig = {
+              configFile: false,
+              logLevel: 'silent',
+              custom,
+              plugins: [
+                {
+                  name: 'test:mutate-config-resolved-input',
+                  configResolved(config: unknown) {
+                    const resolved = config as { custom: typeof custom }
+                    resolved.custom.nested.count++
+                  },
+                },
+              ],
+            } satisfies InlineConfig & { custom: typeof custom }
+
+            await resolveConfig(inlineConfig, 'serve')
+
+            expect(custom.nested.count).toBe(0)
+          })
+
+          test('keeps repeated optimizer resolution idempotent', async () => {
+            const optimizerPlugin = {
+              name: 'test:clone-boundary-idempotence',
+            }
+            const inlineConfig: InlineConfig = {
+              configFile: false,
+              logLevel: 'silent',
+              optimizeDeps: {
+                rolldownOptions: {
+                  plugins: [optimizerPlugin],
+                },
+              },
+            }
+
+            const first = await resolveConfig(inlineConfig, 'serve')
+            const second = await resolveConfig(inlineConfig, 'serve')
+
+            expect(first.environments.client.optimizeDepsPluginNames).toEqual([
+              optimizerPlugin.name,
+            ])
+            expect(second.environments.client.optimizeDepsPluginNames).toEqual([
+              optimizerPlugin.name,
+            ])
+          })
+
+          test('preserves class plugin hooks and plugin identity', async () => {
+            let configHookCalls = 0
+            class ClassPlugin {
+              name = 'test:clone-boundary-plugin-identity'
+              config() {
+                configHookCalls++
+              }
+            }
+            const plugin = new ClassPlugin()
+
+            const resolved = await resolveConfig(
+              {
+                configFile: false,
+                logLevel: 'silent',
+                plugins: [plugin],
+              },
+              'serve',
+            )
+
+            expect(configHookCalls).toBe(1)
+            expect(resolved.plugins).toContain(plugin)
+          })
+
+          test('preserves custom logger identity', async () => {
+            const customLogger = createLogger('silent')
+            const resolved = await resolveConfig(
+              {
+                configFile: false,
+                logLevel: 'silent',
+                customLogger,
+              },
+              'serve',
+            )
+
+            expect(resolved.logger).toBe(customLogger)
+          })
+
+          test('preserves alias customResolver identity before config hooks', async () => {
+            const customResolver = { resolveId() {} }
+            let sameResolver = false
+            const inlineConfig: InlineConfig = {
+              configFile: false,
+              logLevel: 'silent',
+              resolve: {
+                alias: [
+                  {
+                    find: 'source',
+                    replacement: 'replacement',
+                    customResolver,
+                  },
+                ],
+              },
+              plugins: [
+                {
+                  name: 'test:custom-resolver-identity',
+                  config(config) {
+                    const alias = config.resolve?.alias
+                    sameResolver =
+                      Array.isArray(alias) &&
+                      alias[0]?.customResolver === customResolver
+                  },
+                },
+              ],
+            }
+
+            await resolveConfig(inlineConfig, 'serve')
+            expect(sameResolver).toBe(true)
+          })
+
+          test('preserves an opaque HTTP server reference', async () => {
+            const httpServer = createHttpServer()
+            try {
+              const resolved = await resolveConfig(
+                {
+                  configFile: false,
+                  logLevel: 'silent',
+                  server: {
+                    ws: { server: httpServer },
+                  },
+                },
+                'serve',
+              )
+
+              expect(resolved.server.ws.server).toBe(httpServer)
+            } finally {
+              httpServer.removeAllListeners()
+            }
+          })
+
+          test('preserves Buffer values in inline HTTPS options', async () => {
+            const cert = Buffer.from('test certificate bytes')
+            const resolved = await resolveConfig(
+              {
+                configFile: false,
+                logLevel: 'silent',
+                server: {
+                  https: { cert },
+                },
+              },
+              'serve',
+            )
+
+            expect(resolved.server.https?.cert).toBe(cert)
+          })
+
+          test('clones regexp state for resolver working config', async () => {
+            const pattern = /foo/gy
+            pattern.lastIndex = 2
+            let hookPattern: RegExp | undefined
+            await resolveConfig(
+              {
+                configFile: false,
+                logLevel: 'silent',
+                assetsInclude: pattern,
+                plugins: [
+                  {
+                    name: 'test:regexp-clone',
+                    config(config) {
+                      hookPattern = config.assetsInclude as RegExp
+                    },
+                  },
+                ],
+              },
+              'serve',
+            )
+
+            expect(hookPattern).not.toBe(pattern)
+            expect(hookPattern?.source).toBe(pattern.source)
+            expect(hookPattern?.flags).toBe(pattern.flags)
+            expect(hookPattern?.lastIndex).toBe(2)
+          })
+
+          test('handles cycles between mutable config containers', async () => {
+            const custom: { self?: unknown } = {}
+            custom.self = custom
+            let hookCustom: typeof custom | undefined
+            const inlineConfig = {
+              configFile: false,
+              logLevel: 'silent',
+              custom,
+              plugins: [
+                {
+                  name: 'test:cyclic-config',
+                  config(config: unknown) {
+                    hookCustom = (config as { custom: typeof custom }).custom
+                  },
+                },
+              ],
+            } satisfies InlineConfig & { custom: typeof custom }
+
+            await resolveConfig(inlineConfig, 'serve')
+
+            expect(hookCustom).not.toBe(custom)
+            expect(hookCustom?.self).toBe(hookCustom)
+            expect(custom.self).toBe(custom)
+          })
+
+          test('clones a custom-prototype config root while preserving its prototype', async () => {
+            let hookConfig: unknown
+            class Config {
+              configFile = false as const
+              logLevel = 'silent' as const
+              resolve = { conditions: ['source'] }
+              plugins = [
+                {
+                  name: 'test:custom-prototype-root',
+                  config(config: unknown) {
+                    hookConfig = config
+                  },
+                },
+              ]
+            }
+            const inlineConfig = new Config()
+
+            await resolveConfig(inlineConfig, 'serve')
+
+            expect(hookConfig).not.toBe(inlineConfig)
+            expect(hookConfig).toBeInstanceOf(Config)
+            expect(inlineConfig.resolve.conditions).toEqual(['source'])
+          })
+          ''')
+
+      - name: Install dependencies
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.34.5 --activate
+          pnpm install --frozen-lockfile
+
+      - name: Format experiment
+        run: pnpm exec oxfmt --write packages/vite/src/node/config.ts packages/vite/src/node/__tests__/configResolveCloneBoundary.spec.ts
+
+      - name: Build Vite bundle
+        run: pnpm --filter vite build-bundle
+
+      - name: Run focused regression tests
+        run: pnpm test-unit packages/vite/src/node/__tests__/configResolveCloneBoundary.spec.ts
+
+      - name: Commit experiment
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add packages/vite/src/node/config.ts packages/vite/src/node/__tests__/configResolveCloneBoundary.spec.ts
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "experiment: harden config resolution clone boundary"
+          git push origin HEAD:experiment/config-resolve-clone-review-run
