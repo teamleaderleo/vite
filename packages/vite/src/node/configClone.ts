@@ -1,0 +1,102 @@
+function isPlainConfigObject(value: object): value is Record<string, unknown> {
+  if (Object.prototype.toString.call(value) !== '[object Object]') {
+    return false
+  }
+
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
+function clonePluginOption(
+  value: unknown,
+  seen: WeakMap<object, unknown>,
+): unknown {
+  if (!Array.isArray(value)) {
+    return value
+  }
+
+  const existing = seen.get(value)
+  if (existing) {
+    return existing
+  }
+
+  const cloned: unknown[] = []
+  seen.set(value, cloned)
+  for (const item of value) {
+    cloned.push(clonePluginOption(item, seen))
+  }
+  return cloned
+}
+
+function cloneConfigValue(
+  value: unknown,
+  key: string | undefined,
+  seen: WeakMap<object, unknown>,
+): unknown {
+  if (value === null || typeof value !== 'object') {
+    return value
+  }
+
+  // These values are service/plugin instances rather than config containers.
+  // Keep their identity while still copying the arrays that contain plugins.
+  if (key === 'customLogger') {
+    return value
+  }
+
+  if (value instanceof RegExp) {
+    const cloned = new RegExp(value.source, value.flags)
+    cloned.lastIndex = value.lastIndex
+    return cloned
+  }
+
+  if (Array.isArray(value)) {
+    if (key === 'plugins') {
+      return clonePluginOption(value, seen)
+    }
+
+    const existing = seen.get(value)
+    if (existing) {
+      return existing
+    }
+
+    const cloned: unknown[] = []
+    seen.set(value, cloned)
+    for (const item of value) {
+      cloned.push(cloneConfigValue(item, undefined, seen))
+    }
+    return cloned
+  }
+
+  // Buffers, URLs, HTTP servers/agents, class instances, and other opaque
+  // user values keep their identity. Vite may read them, but resolving config
+  // should not turn them into plain objects or reject them merely to isolate
+  // the mutable config containers around them.
+  if (!isPlainConfigObject(value)) {
+    return value
+  }
+
+  const existing = seen.get(value)
+  if (existing) {
+    return existing
+  }
+
+  const cloned: Record<string, unknown> = Object.create(
+    Object.getPrototypeOf(value),
+  )
+  seen.set(value, cloned)
+  for (const property of Object.keys(value)) {
+    cloned[property] = cloneConfigValue(value[property], property, seen)
+  }
+  return cloned
+}
+
+/**
+ * Clone mutable config containers while retaining opaque user-owned values.
+ *
+ * This is intentionally different from `deepClone`: arbitrary Vite config can
+ * contain plugin instances, Node objects, Buffers, and other values that are
+ * meaningful by identity and cannot safely be rebuilt as plain objects.
+ */
+export function cloneConfig<T>(config: T): T {
+  return cloneConfigValue(config, undefined, new WeakMap()) as T
+}
