@@ -20,6 +20,71 @@ const topLevelConfigContainers = new Set([
   'devtools',
 ])
 
+const serverConfigContainers = new Set([
+  'hmr',
+  'ws',
+  'warmup',
+  'fs',
+  'middlewareMode',
+  'https',
+  'proxy',
+  'cors',
+  'watch',
+  'forwardConsole',
+])
+
+const secondLevelConfigContainers = new Map<string, ReadonlySet<string>>([
+  [
+    'build',
+    new Set([
+      'lib',
+      'modulePreload',
+      'terserOptions',
+      'rolldownOptions',
+      'rollupOptions',
+      'commonjsOptions',
+      'dynamicImportVarsOptions',
+      'watch',
+      'license',
+    ]),
+  ],
+  ['worker', new Set(['rolldownOptions', 'rollupOptions'])],
+  [
+    'optimizeDeps',
+    new Set(['esbuildOptions', 'rolldownOptions', 'rollupOptions']),
+  ],
+  ['ssr', new Set(['optimizeDeps', 'resolve'])],
+  [
+    'css',
+    new Set(['modules', 'preprocessorOptions', 'postcss', 'lightningcss']),
+  ],
+  ['server', serverConfigContainers],
+  ['preview', serverConfigContainers],
+])
+
+const cssPreprocessorContainers = new Set([
+  'scss',
+  'sass',
+  'less',
+  'styl',
+  'stylus',
+])
+
+const optimizeDepsRolldownContainers = new Set([
+  'resolve',
+  'output',
+  'transform',
+  'moduleTypes',
+])
+
+const terserConfigContainers = new Set([
+  'compress',
+  'mangle',
+  'format',
+  'output',
+  'parse',
+])
+
 function isArrayIndex(key: PropertyKey): boolean {
   return typeof key === 'string' && /^(?:0|[1-9]\d*)$/.test(key)
 }
@@ -43,70 +108,32 @@ function isPath(
   )
 }
 
+function isBundlerOutputContainer(path: readonly PropertyKey[]): boolean {
+  if (
+    (path[0] !== 'build' && path[0] !== 'worker') ||
+    (path[1] !== 'rolldownOptions' && path[1] !== 'rollupOptions') ||
+    path[2] !== 'output'
+  ) {
+    return false
+  }
+  return path.length === 3 || (path.length === 4 && isArrayIndex(path[3]))
+}
+
 function isConfigContainer(rawPath: readonly PropertyKey[]): boolean {
   if (isPath(rawPath, 'environments')) return true
 
   const path = normalizeConfigPath(rawPath)
   if (path.length === 0) return true
 
+  if (path.length === 1 && typeof path[0] === 'string') {
+    return topLevelConfigContainers.has(path[0])
+  }
+
   if (
-    path.length === 1 &&
+    path.length === 2 &&
     typeof path[0] === 'string' &&
-    topLevelConfigContainers.has(path[0])
-  ) {
-    return true
-  }
-
-  if (
-    path.length === 2 &&
-    path[0] === 'build' &&
-    [
-      'lib',
-      'modulePreload',
-      'terserOptions',
-      'rolldownOptions',
-      'rollupOptions',
-      'commonjsOptions',
-      'dynamicImportVarsOptions',
-      'watch',
-      'license',
-    ].includes(path[1] as string)
-  ) {
-    return true
-  }
-
-  if (
-    path.length === 2 &&
-    path[0] === 'worker' &&
-    ['rolldownOptions', 'rollupOptions'].includes(path[1] as string)
-  ) {
-    return true
-  }
-
-  if (
-    path.length === 2 &&
-    path[0] === 'optimizeDeps' &&
-    ['esbuildOptions', 'rolldownOptions', 'rollupOptions'].includes(
-      path[1] as string,
-    )
-  ) {
-    return true
-  }
-
-  if (
-    path.length === 2 &&
-    path[0] === 'ssr' &&
-    ['optimizeDeps', 'resolve'].includes(path[1] as string)
-  ) {
-    return true
-  }
-
-  if (
-    path.length === 2 &&
-    path[0] === 'css' &&
-    ['modules', 'preprocessorOptions', 'postcss', 'lightningcss'].includes(
-      path[1] as string,
-    )
+    typeof path[1] === 'string' &&
+    secondLevelConfigContainers.get(path[0])?.has(path[1])
   ) {
     return true
   }
@@ -115,26 +142,8 @@ function isConfigContainer(rawPath: readonly PropertyKey[]): boolean {
     path.length === 3 &&
     path[0] === 'css' &&
     path[1] === 'preprocessorOptions' &&
-    ['scss', 'sass', 'less', 'styl', 'stylus'].includes(path[2] as string)
-  ) {
-    return true
-  }
-
-  if (
-    path.length === 2 &&
-    (path[0] === 'server' || path[0] === 'preview') &&
-    [
-      'hmr',
-      'ws',
-      'warmup',
-      'fs',
-      'middlewareMode',
-      'https',
-      'proxy',
-      'cors',
-      'watch',
-      'forwardConsole',
-    ].includes(path[1] as string)
+    typeof path[2] === 'string' &&
+    cssPreprocessorContainers.has(path[2])
   ) {
     return true
   }
@@ -154,7 +163,33 @@ function isConfigContainer(rawPath: readonly PropertyKey[]): boolean {
     path.length === 3 &&
     path[0] === 'optimizeDeps' &&
     path[1] === 'rolldownOptions' &&
-    ['resolve', 'output', 'transform', 'moduleTypes'].includes(path[2] as string)
+    typeof path[2] === 'string' &&
+    optimizeDepsRolldownContainers.has(path[2])
+  ) {
+    return true
+  }
+
+  // Output option objects are callback-bearing configuration containers, while
+  // plugin/service values nested inside them should keep their own identity.
+  if (isBundlerOutputContainer(path)) return true
+
+  if (
+    path[0] === 'build' &&
+    path[1] === 'terserOptions' &&
+    ((path.length === 3 &&
+      typeof path[2] === 'string' &&
+      terserConfigContainers.has(path[2])) ||
+      isPath(path, 'build', 'terserOptions', 'mangle', 'properties'))
+  ) {
+    return true
+  }
+
+  // Proxy route options are configuration bags containing callbacks and opaque
+  // runtime values such as Agents. Copy the bag while retaining those leaves.
+  if (
+    path.length === 3 &&
+    (path[0] === 'server' || path[0] === 'preview') &&
+    path[1] === 'proxy'
   ) {
     return true
   }
