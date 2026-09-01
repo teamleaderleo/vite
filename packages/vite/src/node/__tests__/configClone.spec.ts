@@ -178,7 +178,9 @@ test('retains imperative objects inside third-party option bags', () => {
   const cloned = cloneConfig(config)
 
   expect(cloned.css).not.toBe(config.css)
-  expect(cloned.css.preprocessorOptions).not.toBe(config.css.preprocessorOptions)
+  expect(cloned.css.preprocessorOptions).not.toBe(
+    config.css.preprocessorOptions,
+  )
   expect(cloned.css.preprocessorOptions.scss).not.toBe(
     config.css.preprocessorOptions.scss,
   )
