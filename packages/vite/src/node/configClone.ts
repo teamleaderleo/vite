@@ -89,7 +89,9 @@ function isPath(
   )
 }
 
-function pathWithoutArrayIndexes(path: readonly PropertyKey[]): string | undefined {
+function pathWithoutArrayIndexes(
+  path: readonly PropertyKey[],
+): string | undefined {
   const parts: string[] = []
   for (const part of path) {
     if (isArrayIndex(part)) continue
@@ -188,9 +190,7 @@ function hasOwnBehavior(value: object): boolean {
 
 function isViteConfigSubtree(rawPath: readonly PropertyKey[]): boolean {
   if (rawPath.length === 0 || rawPath[0] === 'environments') return true
-  return (
-    typeof rawPath[0] === 'string' && viteConfigRootKeys.has(rawPath[0])
-  )
+  return typeof rawPath[0] === 'string' && viteConfigRootKeys.has(rawPath[0])
 }
 
 function shouldPreserveObject(
@@ -272,12 +272,7 @@ function cloneConfigValue(
         Reflect.set(
           cloned,
           key,
-          cloneConfigValue(
-            descriptor.value,
-            [...path, key],
-            preserved,
-            seen,
-          ),
+          cloneConfigValue(descriptor.value, [...path, key], preserved, seen),
         )
       } else {
         Object.defineProperty(cloned, key, descriptor)
