@@ -18,6 +18,17 @@ test('does not write resolver working state into the caller inline config', asyn
   })
 })
 
+test('preserves public inlineConfig identity', async () => {
+  const inlineConfig: InlineConfig = {
+    configFile: false,
+    logLevel: 'silent',
+  }
+
+  const resolved = await resolveConfig(inlineConfig, 'serve')
+
+  expect(resolved.inlineConfig).toBe(inlineConfig)
+})
+
 test('accepts frozen caller config containers', async () => {
   const optimizeDeps = Object.freeze({ rolldownOptions: {} })
   const inlineConfig: InlineConfig = {
