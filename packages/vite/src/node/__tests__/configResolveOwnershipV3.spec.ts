@@ -155,7 +155,9 @@ test('isolates PostCSS options while preserving custom syntax state', async () =
     parse() {
       this.calls++
     },
-    stringify() {},
+    stringify() {
+      return undefined
+    },
   }
   const postcss: any = { syntax }
   const inlineConfig: InlineConfig = {
