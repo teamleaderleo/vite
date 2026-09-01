@@ -1,0 +1,294 @@
+name: Config resolve input ownership polish
+
+on:
+  push:
+    branches:
+      - experiment/config-resolve-input-ownership-polished
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experiment/config-resolve-input-ownership-polished
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+
+      - name: Apply polished candidate
+        shell: python
+        run: |
+          from pathlib import Path
+
+          clone_path = Path('packages/vite/src/node/configClone.ts')
+          clone_path.write_text(r'''const configIdentityKeys = new Set([
+            'customLogger',
+            'customResolver',
+            'nameCache',
+          ])
+
+          function isPlainConfigObject(value: object): value is Record<string, unknown> {
+            if (Object.prototype.toString.call(value) !== '[object Object]') {
+              return false
+            }
+
+            const prototype = Object.getPrototypeOf(value)
+            return prototype === Object.prototype || prototype == null
+          }
+
+          function clonePluginOption(
+            value: unknown,
+            seen: WeakMap<object, unknown>,
+          ): unknown {
+            if (!Array.isArray(value)) {
+              return value
+            }
+
+            const existing = seen.get(value)
+            if (existing) {
+              return existing
+            }
+
+            const cloned: unknown[] = []
+            seen.set(value, cloned)
+            for (const item of value) {
+              cloned.push(clonePluginOption(item, seen))
+            }
+            return cloned
+          }
+
+          function cloneConfigValue(
+            value: unknown,
+            key: string | undefined,
+            seen: WeakMap<object, unknown>,
+            forceConfigContainer = false,
+          ): unknown {
+            if (value == null || typeof value !== 'object') {
+              return value
+            }
+
+            // These values are service/plugin instances rather than config containers.
+            // Keep their identity while still copying the arrays that contain plugins.
+            if (key && configIdentityKeys.has(key)) {
+              return value
+            }
+
+            if (value instanceof RegExp) {
+              const cloned = new RegExp(value.source, value.flags)
+              cloned.lastIndex = value.lastIndex
+              return cloned
+            }
+
+            if (Array.isArray(value)) {
+              if (key === 'plugins') {
+                return clonePluginOption(value, seen)
+              }
+
+              const existing = seen.get(value)
+              if (existing) {
+                return existing
+              }
+
+              const cloned: unknown[] = []
+              seen.set(value, cloned)
+              for (const item of value) {
+                cloned.push(cloneConfigValue(item, undefined, seen))
+              }
+              return cloned
+            }
+
+            // Buffers, URLs, HTTP servers/agents, class instances, and other opaque
+            // nested user values keep their identity. The root value is known to be the
+            // config container itself, so copy its enumerable fields even if a caller
+            // supplied it through a custom prototype.
+            if (
+              !isPlainConfigObject(value) &&
+              (!forceConfigContainer ||
+                Object.prototype.toString.call(value) !== '[object Object]')
+            ) {
+              return value
+            }
+
+            const existing = seen.get(value)
+            if (existing) {
+              return existing
+            }
+
+            const configObject = value as Record<string, unknown>
+            const cloned: Record<string, unknown> = Object.create(
+              Object.getPrototypeOf(value),
+            )
+            seen.set(value, cloned)
+            for (const property of Object.keys(configObject)) {
+              cloned[property] = cloneConfigValue(configObject[property], property, seen)
+            }
+            return cloned
+          }
+
+          /**
+           * Clone mutable config containers while retaining opaque user-owned values.
+           *
+           * Vite config can contain plugin instances, resolver/logger services, Node
+           * objects, Buffers, and other values whose identity is part of their behavior.
+           */
+          export function cloneConfig<T>(config: T): T {
+            return cloneConfigValue(config, undefined, new WeakMap(), true) as T
+          }
+          ''')
+
+          config_path = Path('packages/vite/src/node/config.ts')
+          text = config_path.read_text()
+          import_anchor = "  resolveBuilderOptions,\n} from './build'\n"
+          if "import { cloneConfig } from './configClone'\n" not in text:
+            if import_anchor not in text:
+              raise SystemExit('build import anchor missing')
+            text = text.replace(
+              import_anchor,
+              import_anchor + "import { cloneConfig } from './configClone'\n",
+              1,
+            )
+
+          if '  let config = inlineConfig\n' not in text:
+            raise SystemExit('resolveConfig input anchor missing')
+          text = text.replace(
+            '  let config = inlineConfig\n',
+            '  let config = cloneConfig(inlineConfig)\n',
+            1,
+          )
+
+          shallow_start_marker = (
+            '  // Resolver-generated environment defaults must not be written back into\n'
+          )
+          next_section_marker = '  // Ensure default client and ssr environments\n'
+          shallow_start = text.find(shallow_start_marker)
+          if shallow_start == -1:
+            raise SystemExit('existing environment-copy patch missing')
+          shallow_end = text.find(next_section_marker, shallow_start)
+          if shallow_end == -1:
+            raise SystemExit('environment defaults section missing')
+          text = text[:shallow_start] + text[shallow_end:]
+          config_path.write_text(text)
+
+          test_path = Path('packages/vite/src/node/__tests__/config.spec.ts')
+          tests = test_path.read_text()
+          idempotence_test = r'''test('does not duplicate optimizer plugins when resolving the same inline config twice', async () => {
+            const optimizerPlugin = {
+              name: 'test:resolve-config-idempotence',
+            }
+
+            const inlineConfig: InlineConfig = {
+              configFile: false,
+              logLevel: 'silent',
+              optimizeDeps: {
+                rolldownOptions: {
+                  plugins: [optimizerPlugin],
+                },
+              },
+            }
+
+            const first = await resolveConfig(inlineConfig, 'serve')
+            const second = await resolveConfig(inlineConfig, 'serve')
+
+            expect(first.environments.client.optimizeDepsPluginNames).toEqual([
+              optimizerPlugin.name,
+            ])
+            expect(second.environments.client.optimizeDepsPluginNames).toEqual([
+              optimizerPlugin.name,
+            ])
+          })'''
+          if idempotence_test not in tests:
+            raise SystemExit('idempotence regression anchor missing')
+
+          extra_tests = r'''
+
+          test('does not mutate caller-owned config while resolving', async () => {
+            const conditions = ['source']
+            const optimizeDeps = Object.freeze({ rolldownOptions: {} })
+            const inlineConfig: InlineConfig = {
+              configFile: false,
+              logLevel: 'silent',
+              optimizeDeps,
+              resolve: { conditions },
+              plugins: [
+                {
+                  name: 'test:mutate-config-hook-input',
+                  config(config) {
+                    config.resolve ??= {}
+                    config.resolve.conditions ??= []
+                    config.resolve.conditions.push('from-hook')
+                    config.define ??= {}
+                    config.define.__FROM_HOOK__ = 'true'
+                  },
+                },
+              ],
+            }
+
+            await resolveConfig(inlineConfig, 'serve')
+
+            expect(conditions).toEqual(['source'])
+            expect(inlineConfig.define).toBeUndefined()
+            expect(
+              Object.getOwnPropertyDescriptor(optimizeDeps, 'rollupOptions')?.get,
+            ).toBeUndefined()
+            expect(inlineConfig.optimizeDeps?.rolldownOptions).toBeUndefined()
+          })
+
+          test('preserves caller-owned server instances while resolving config', async () => {
+            const wsServer = http.createServer()
+            try {
+              const resolved = await resolveConfig(
+                {
+                  configFile: false,
+                  logLevel: 'silent',
+                  server: { ws: { server: wsServer } },
+                },
+                'serve',
+              )
+
+              expect(resolved.server.ws?.server).toBe(wsServer)
+            } finally {
+              wsServer.removeAllListeners()
+            }
+          })'''
+
+          if "test('does not mutate caller-owned config while resolving'" not in tests:
+            tests = tests.replace(idempotence_test, idempotence_test + extra_tests, 1)
+          test_path.write_text(tests)
+
+      - name: Install dependencies
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.34.5 --activate
+          pnpm install --frozen-lockfile
+
+      - name: Format candidate
+        run: pnpm format
+
+      - name: Lint candidate
+        run: pnpm exec eslint packages/vite/src/node/configClone.ts packages/vite/src/node/config.ts packages/vite/src/node/__tests__/config.spec.ts
+
+      - name: Typecheck Vite
+        run: pnpm --filter vite typecheck
+
+      - name: Build Vite bundle
+        run: pnpm --filter vite build-bundle
+
+      - name: Run config unit tests
+        run: pnpm test-unit packages/vite/src/node/__tests__/config.spec.ts
+
+      - name: Commit candidate
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add packages/vite/src/node/configClone.ts packages/vite/src/node/config.ts packages/vite/src/node/__tests__/config.spec.ts
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit --no-verify -m "experiment: polish config input ownership fix"
+          git push origin HEAD:experiment/config-resolve-input-ownership-polished
