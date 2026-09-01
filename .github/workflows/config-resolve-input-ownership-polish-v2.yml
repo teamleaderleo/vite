@@ -1,0 +1,142 @@
+name: Config resolve input ownership polish v2
+
+on:
+  push:
+    branches:
+      - experiment/config-resolve-input-ownership-polished-v2
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experiment/config-resolve-input-ownership-polished-v2
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+
+      - name: Apply reviewed candidate
+        run: |
+          git fetch origin fix/config-resolve-input-ownership
+          git checkout FETCH_HEAD -- packages/vite/src/node/configClone.ts packages/vite/src/node/config.ts
+
+      - name: Polish candidate and tests
+        shell: python
+        run: |
+          from pathlib import Path
+
+          config_path = Path('packages/vite/src/node/config.ts')
+          text = config_path.read_text()
+          shallow_start_marker = (
+            '  // Resolver-generated environment defaults must not be written back into\n'
+          )
+          next_section_marker = '  // Ensure default client and ssr environments\n'
+          shallow_start = text.find(shallow_start_marker)
+          if shallow_start == -1:
+            raise SystemExit('environment-copy patch missing')
+          shallow_end = text.find(next_section_marker, shallow_start)
+          if shallow_end == -1:
+            raise SystemExit('environment defaults section missing')
+          config_path.write_text(text[:shallow_start] + text[shallow_end:])
+
+          test_path = Path('packages/vite/src/node/__tests__/config.spec.ts')
+          tests = test_path.read_text()
+          anchor = "test('does not duplicate optimizer plugins when resolving the same inline config twice', async () => {"
+          if anchor not in tests:
+            raise SystemExit('idempotence regression missing')
+
+          extra_tests = r'''
+
+          test('does not mutate caller-owned config while resolving', async () => {
+            const conditions = ['source']
+            const optimizeDeps = Object.freeze({ rolldownOptions: {} })
+            const inlineConfig: InlineConfig = {
+              configFile: false,
+              logLevel: 'silent',
+              optimizeDeps,
+              resolve: { conditions },
+              plugins: [
+                {
+                  name: 'test:mutate-config-hook-input',
+                  config(config) {
+                    config.resolve ??= {}
+                    config.resolve.conditions ??= []
+                    config.resolve.conditions.push('from-hook')
+                    config.define ??= {}
+                    config.define.__FROM_HOOK__ = 'true'
+                  },
+                },
+              ],
+            }
+
+            await resolveConfig(inlineConfig, 'serve')
+
+            expect(conditions).toEqual(['source'])
+            expect(inlineConfig.define).toBeUndefined()
+            expect(
+              Object.getOwnPropertyDescriptor(optimizeDeps, 'rollupOptions')?.get,
+            ).toBeUndefined()
+            expect(inlineConfig.optimizeDeps?.rolldownOptions).toBeUndefined()
+          })
+
+          test('preserves caller-owned server instances while resolving config', async () => {
+            const wsServer = http.createServer()
+            try {
+              const resolved = await resolveConfig(
+                {
+                  configFile: false,
+                  logLevel: 'silent',
+                  server: { ws: { server: wsServer } },
+                },
+                'serve',
+              )
+
+              expect(resolved.server.ws?.server).toBe(wsServer)
+            } finally {
+              wsServer.removeAllListeners()
+            }
+          })
+          '''
+
+          if "test('does not mutate caller-owned config while resolving'" not in tests:
+            tests += extra_tests
+          test_path.write_text(tests)
+
+      - name: Install dependencies
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.34.5 --activate
+          pnpm install --frozen-lockfile
+
+      - name: Format candidate
+        run: pnpm format
+
+      - name: Lint candidate
+        run: pnpm exec eslint packages/vite/src/node/configClone.ts packages/vite/src/node/config.ts packages/vite/src/node/__tests__/config.spec.ts
+
+      - name: Build repository packages
+        run: pnpm run build
+
+      - name: Typecheck Vite
+        run: pnpm --filter vite typecheck
+
+      - name: Run config unit tests
+        run: pnpm test-unit packages/vite/src/node/__tests__/config.spec.ts
+
+      - name: Commit candidate
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add packages/vite/src/node/configClone.ts packages/vite/src/node/config.ts packages/vite/src/node/__tests__/config.spec.ts
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit --no-verify -m "experiment: polish config input ownership fix"
+          git push origin HEAD:experiment/config-resolve-input-ownership-polished-v2
