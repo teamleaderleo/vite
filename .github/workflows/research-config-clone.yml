@@ -1,0 +1,65 @@
+name: Research Config Clone
+
+env:
+  NODE_OPTIONS: --max-old-space-size=6144
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+
+permissions: {}
+
+on:
+  push:
+    branches:
+      - research/config-clone-patched-ci
+  workflow_dispatch:
+
+concurrency:
+  group: research-config-clone-${{ github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  focused:
+    name: Config clone focused validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+
+      - name: Set node version
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install deps
+        run: pnpm install
+
+      - name: Apply resolver entry clone
+        run: node scripts/research-config-clone-patch.mjs
+
+      - name: Check patched diff
+        run: git diff --check && git diff -- packages/vite/src/node/config.ts
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Focused unit tests
+        run: >-
+          pnpm exec vitest run
+          packages/vite/src/node/__tests__/configClone.spec.ts
+          packages/vite/src/node/__tests__/configResolveInputOwnership.spec.ts
+          packages/vite/src/node/__tests__/configResolveClonePrototype.spec.ts
+          packages/vite/src/node/__tests__/config.spec.ts
+
+      - name: Lint research files and patched config
+        run: >-
+          pnpm exec eslint
+          packages/vite/src/node/config.ts
+          packages/vite/src/node/configClone.ts
+          packages/vite/src/node/__tests__/configClone.spec.ts
+          packages/vite/src/node/__tests__/configResolveInputOwnership.spec.ts
+          packages/vite/src/node/__tests__/configResolveClonePrototype.spec.ts
