@@ -20,6 +20,26 @@ const topLevelConfigContainers = new Set([
   'devtools',
 ])
 
+const pluginCollectionPaths = new Set([
+  'plugins',
+  'worker.plugins',
+  'build.rolldownOptions.plugins',
+  'build.rollupOptions.plugins',
+  'build.rolldownOptions.output.plugins',
+  'build.rollupOptions.output.plugins',
+  'worker.rolldownOptions.plugins',
+  'worker.rollupOptions.plugins',
+  'worker.rolldownOptions.output.plugins',
+  'worker.rollupOptions.output.plugins',
+  'optimizeDeps.esbuildOptions.plugins',
+  'optimizeDeps.rolldownOptions.plugins',
+  'optimizeDeps.rollupOptions.plugins',
+  'optimizeDeps.rolldownOptions.output.plugins',
+  'optimizeDeps.rollupOptions.output.plugins',
+  'css.postcss.plugins',
+  'css.preprocessorOptions.less.plugins',
+])
+
 function isArrayIndex(key: PropertyKey): boolean {
   return typeof key === 'string' && /^(?:0|[1-9]\d*)$/.test(key)
 }
@@ -40,6 +60,35 @@ function isPath(
   return (
     path.length === parts.length &&
     parts.every((part, index) => path[index] === part)
+  )
+}
+
+function pathWithoutArrayIndexes(path: readonly PropertyKey[]): string | undefined {
+  const parts: string[] = []
+  for (const part of path) {
+    if (isArrayIndex(part)) continue
+    if (typeof part !== 'string') return
+    parts.push(part)
+  }
+  return parts.join('.')
+}
+
+function isPluginLeaf(rawPath: readonly PropertyKey[]): boolean {
+  const path = normalizeConfigPath(rawPath)
+  if (!isArrayIndex(path[path.length - 1])) return false
+  const collectionPath = pathWithoutArrayIndexes(path)
+  return collectionPath != null && pluginCollectionPaths.has(collectionPath)
+}
+
+function isBundlerOutputContainer(path: readonly PropertyKey[]): boolean {
+  const withoutIndexes = pathWithoutArrayIndexes(path)
+  return (
+    withoutIndexes === 'build.rolldownOptions.output' ||
+    withoutIndexes === 'build.rollupOptions.output' ||
+    withoutIndexes === 'worker.rolldownOptions.output' ||
+    withoutIndexes === 'worker.rollupOptions.output' ||
+    withoutIndexes === 'optimizeDeps.rolldownOptions.output' ||
+    withoutIndexes === 'optimizeDeps.rollupOptions.output'
   )
 }
 
@@ -141,12 +190,22 @@ function isConfigContainer(rawPath: readonly PropertyKey[]): boolean {
 
   if (
     path.length === 3 &&
+    (path[0] === 'server' || path[0] === 'preview') &&
+    path[1] === 'proxy'
+  ) {
+    return true
+  }
+
+  if (
+    path.length === 3 &&
     path[0] === 'resolve' &&
     path[1] === 'alias' &&
     isArrayIndex(path[2])
   ) {
     return true
   }
+
+  if (isBundlerOutputContainer(path)) return true
 
   // `resolveDepOptimizationOptions` writes defaults into these nested
   // Rolldown option containers during resolution.
@@ -189,14 +248,59 @@ function hasOwnBehavior(value: object): boolean {
   return false
 }
 
+function shouldPreserveObject(
+  value: object,
+  path: readonly PropertyKey[],
+  isRoot: boolean,
+): boolean {
+  if (isRoot || value instanceof RegExp || Array.isArray(value)) return false
+  if (isPreservedState(path) || isPluginLeaf(path)) return true
+
+  const isPlain = isPlainConfigObject(value)
+  if (!isPlain) return true
+  return !isConfigContainer(path) && hasOwnBehavior(value)
+}
+
+function collectPreservedObjects(
+  value: unknown,
+  path: readonly PropertyKey[],
+  preserved: WeakSet<object>,
+  visiting: WeakSet<object>,
+  isRoot = false,
+): void {
+  if (value == null || typeof value !== 'object') return
+  if (preserved.has(value)) return
+
+  if (shouldPreserveObject(value, path, isRoot)) {
+    preserved.add(value)
+    return
+  }
+  if (value instanceof RegExp || visiting.has(value)) return
+
+  visiting.add(value)
+  for (const key of Reflect.ownKeys(value)) {
+    if (Array.isArray(value) && key === 'length') continue
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    if (!descriptor?.enumerable || !('value' in descriptor)) continue
+    collectPreservedObjects(
+      descriptor.value,
+      [...path, key],
+      preserved,
+      visiting,
+    )
+  }
+  visiting.delete(value)
+}
+
 function cloneConfigValue(
   value: unknown,
   path: readonly PropertyKey[],
+  preserved: WeakSet<object>,
   seen: WeakMap<object, unknown>,
   isRoot = false,
 ): unknown {
   if (value == null || typeof value !== 'object') return value
-  if (isPreservedState(path)) return value
+  if (preserved.has(value)) return value
 
   const existing = seen.get(value)
   if (existing !== undefined) return existing
@@ -219,7 +323,12 @@ function cloneConfigValue(
         Reflect.set(
           cloned,
           key,
-          cloneConfigValue(descriptor.value, [...path, key], seen),
+          cloneConfigValue(
+            descriptor.value,
+            [...path, key],
+            preserved,
+            seen,
+          ),
         )
       } else {
         Object.defineProperty(cloned, key, descriptor)
@@ -231,13 +340,6 @@ function cloneConfigValue(
   const isPlain = isPlainConfigObject(value)
   if (!isPlain && !isRoot) return value
 
-  // Unknown plain objects with their own methods/accessors are treated as
-  // behavior-bearing user values. Known option containers are still copied so
-  // Vite and config hooks can safely normalize their fields.
-  if (isPlain && !isConfigContainer(path) && hasOwnBehavior(value)) {
-    return value
-  }
-
   const cloned: Record<PropertyKey, unknown> = Object.create(
     Object.getPrototypeOf(value) === null ? null : Object.prototype,
   )
@@ -246,7 +348,12 @@ function cloneConfigValue(
     const descriptor = Object.getOwnPropertyDescriptor(value, key)
     if (!descriptor?.enumerable) continue
     if ('value' in descriptor) {
-      cloned[key] = cloneConfigValue(descriptor.value, [...path, key], seen)
+      cloned[key] = cloneConfigValue(
+        descriptor.value,
+        [...path, key],
+        preserved,
+        seen,
+      )
     } else {
       Object.defineProperty(cloned, key, descriptor)
     }
@@ -257,10 +364,13 @@ function cloneConfigValue(
 /**
  * Create the mutable working config used by `resolveConfig`.
  *
- * Configuration containers are detached from the caller input. Opaque runtime
- * objects and unknown behavior-bearing values retain their identity because
- * arbitrary JavaScript services cannot be cloned faithfully.
+ * Configuration containers are detached from the caller input. Opaque runtime,
+ * plugin, service, and mutable state values retain their identity because
+ * arbitrary JavaScript services cannot be cloned faithfully. If one object is
+ * reachable through both kinds of paths, identity preservation wins.
  */
 export function cloneConfigForResolve<T>(config: T): T {
-  return cloneConfigValue(config, [], new WeakMap(), true) as T
+  const preserved = new WeakSet<object>()
+  collectPreservedObjects(config, [], preserved, new WeakSet(), true)
+  return cloneConfigValue(config, [], preserved, new WeakMap(), true) as T
 }
