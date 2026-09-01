@@ -239,7 +239,7 @@ function cloneConfigValue(
   }
 
   const cloned: Record<PropertyKey, unknown> = Object.create(
-    Object.getPrototypeOf(value) === null ? null : Object.prototype,
+    Object.getPrototypeOf(value) == null ? null : Object.prototype,
   )
   seen.set(value, cloned)
   for (const key of Reflect.ownKeys(value)) {
