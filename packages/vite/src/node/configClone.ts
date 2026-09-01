@@ -1,3 +1,5 @@
+const configIdentityKeys = new Set(['customLogger', 'customResolver'])
+
 function isPlainConfigObject(value: object): value is Record<string, unknown> {
   if (Object.prototype.toString.call(value) !== '[object Object]') {
     return false
@@ -39,7 +41,7 @@ function cloneConfigValue(
 
   // These values are service/plugin instances rather than config containers.
   // Keep their identity while still copying the arrays that contain plugins.
-  if (key === 'customLogger') {
+  if (key && configIdentityKeys.has(key)) {
     return value
   }
 
@@ -94,8 +96,9 @@ function cloneConfigValue(
  * Clone mutable config containers while retaining opaque user-owned values.
  *
  * This is intentionally different from `deepClone`: arbitrary Vite config can
- * contain plugin instances, Node objects, Buffers, and other values that are
- * meaningful by identity and cannot safely be rebuilt as plain objects.
+ * contain plugin instances, resolver/logger services, Node objects, Buffers,
+ * and other values that are meaningful by identity and cannot safely be rebuilt
+ * as plain objects.
  */
 export function cloneConfig<T>(config: T): T {
   return cloneConfigValue(config, undefined, new WeakMap()) as T
