@@ -51,6 +51,7 @@ import {
   resolveBuildEnvironmentOptions,
   resolveBuilderOptions,
 } from './build'
+import { cloneConfig } from './configClone'
 import {
   CLIENT_ENTRY,
   DEFAULT_ASSETS_RE,
@@ -1464,7 +1465,7 @@ export async function resolveConfig(
   /** @internal */
   patchPlugins: ((resolvedPlugins: Plugin[]) => void) | undefined = undefined,
 ): Promise<ResolvedConfig> {
-  let config = inlineConfig
+  let config = cloneConfig(inlineConfig)
   config.build ??= {}
   setupRollupOptionCompat(config.build, 'build')
   config.worker ??= {}
@@ -1547,18 +1548,6 @@ export async function resolveConfig(
   // run config hooks
   const userPlugins = [...prePlugins, ...normalPlugins, ...postPlugins]
   config = await runConfigHook(config, userPlugins, configEnv)
-
-  // Resolver-generated environment defaults must not be written back into
-  // the inline config reused by server.restart().
-  config = {
-    ...config,
-    environments: Object.fromEntries(
-      Object.entries(config.environments ?? {}).map(([name, environment]) => [
-        name,
-        environment ? { ...environment } : environment,
-      ]),
-    ),
-  }
 
   // Ensure default client and ssr environments
   // If there are present, ensure order { client, ssr, ...custom }

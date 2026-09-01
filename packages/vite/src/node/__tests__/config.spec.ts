@@ -2250,3 +2250,55 @@ test('does not duplicate optimizer plugins when resolving the same inline config
     optimizerPlugin.name,
   ])
 })
+
+test('does not mutate caller-owned config while resolving', async () => {
+  const conditions = ['source']
+  const rolldownOptions = {}
+  const optimizeDeps = Object.freeze({ rolldownOptions })
+  const inlineConfig: InlineConfig = {
+    configFile: false,
+    logLevel: 'silent',
+    optimizeDeps,
+    resolve: { conditions },
+    plugins: [
+      {
+        name: 'test:mutate-config-hook-input',
+        config(config) {
+          config.resolve ??= {}
+          config.resolve.conditions ??= []
+          config.resolve.conditions.push('from-hook')
+          config.define ??= {}
+          config.define.__FROM_HOOK__ = 'true'
+        },
+      },
+    ],
+  }
+
+  await resolveConfig(inlineConfig, 'serve')
+
+  expect(conditions).toEqual(['source'])
+  expect(inlineConfig.define).toBeUndefined()
+  expect(Object.keys(optimizeDeps)).toEqual(['rolldownOptions'])
+  expect(
+    Object.getOwnPropertyDescriptor(optimizeDeps, 'rollupOptions')?.get,
+  ).toBeUndefined()
+  expect(inlineConfig.optimizeDeps?.rolldownOptions).toBe(rolldownOptions)
+})
+
+test('preserves caller-owned server instances while resolving config', async () => {
+  const wsServer = http.createServer()
+  try {
+    const resolved = await resolveConfig(
+      {
+        configFile: false,
+        logLevel: 'silent',
+        server: { ws: { server: wsServer } },
+      },
+      'serve',
+    )
+
+    expect(resolved.server.ws?.server).toBe(wsServer)
+  } finally {
+    wsServer.removeAllListeners()
+  }
+})
