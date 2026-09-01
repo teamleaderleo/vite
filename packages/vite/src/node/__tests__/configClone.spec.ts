@@ -20,17 +20,19 @@ test('copies plugin arrays while retaining plugin objects', () => {
     config() {}
   }
   const classPlugin = new ClassPlugin()
+  const nestedPlugins = [classPlugin]
   const config = {
-    plugins: [plainPlugin, [classPlugin]],
+    plugins: [plainPlugin, nestedPlugins] as unknown[],
     optimizeDeps: { rolldownOptions: { plugins: [plainPlugin] } },
   }
 
   const cloned = cloneConfig(config)
+  const clonedNestedPlugins = cloned.plugins[1] as unknown[]
 
   expect(cloned.plugins).not.toBe(config.plugins)
-  expect(cloned.plugins[1]).not.toBe(config.plugins[1])
+  expect(clonedNestedPlugins).not.toBe(nestedPlugins)
   expect(cloned.plugins[0]).toBe(plainPlugin)
-  expect(cloned.plugins[1][0]).toBe(classPlugin)
+  expect(clonedNestedPlugins[0]).toBe(classPlugin)
   expect(cloned.optimizeDeps.rolldownOptions.plugins).not.toBe(
     config.optimizeDeps.rolldownOptions.plugins,
   )
