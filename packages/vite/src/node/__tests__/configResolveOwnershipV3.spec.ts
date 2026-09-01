@@ -149,6 +149,38 @@ test('isolates Sass options while preserving importer state', async () => {
   expect(importer.calls).toBe(1)
 })
 
+test('isolates PostCSS options while preserving custom syntax state', async () => {
+  const syntax = {
+    calls: 0,
+    parse() {
+      this.calls++
+    },
+    stringify() {},
+  }
+  const postcss: any = { syntax }
+  const inlineConfig: InlineConfig = {
+    configFile: false,
+    logLevel: 'silent',
+    css: { postcss },
+    plugins: [
+      {
+        name: 'test:mutate-postcss-options',
+        config(config) {
+          ;(config.css!.postcss as any).map = false
+        },
+      },
+    ],
+  }
+
+  const resolved = await resolveConfig(inlineConfig, 'serve')
+
+  expect(postcss.map).toBeUndefined()
+  const resolvedSyntax = (resolved.css.postcss as any).syntax as typeof syntax
+  expect(resolvedSyntax).toBe(syntax)
+  resolvedSyntax.parse()
+  expect(syntax.calls).toBe(1)
+})
+
 test('does not mutate optimizer option containers', async () => {
   const output = {
     banner() {
