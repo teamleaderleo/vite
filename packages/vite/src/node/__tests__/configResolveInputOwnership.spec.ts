@@ -153,6 +153,26 @@ test('preserves custom logger identity', async () => {
   expect(resolved.logger).toBe(customLogger)
 })
 
+test('preserves terser nameCache identity', async () => {
+  const nameCache = {}
+  const inlineConfig: InlineConfig = {
+    configFile: false,
+    logLevel: 'silent',
+    build: {
+      terserOptions: {
+        nameCache,
+      },
+    },
+  }
+
+  const resolved = await resolveConfig(inlineConfig, 'serve')
+
+  expect(resolved.build.terserOptions.nameCache).toBe(nameCache)
+  expect(resolved.environments.client.build.terserOptions.nameCache).toBe(
+    nameCache,
+  )
+})
+
 test('preserves class-based plugin hooks and plugin identity', async () => {
   let configHookCalls = 0
 
