@@ -4,6 +4,48 @@ const configIdentityKeys = new Set([
   'nameCache',
 ])
 
+const configIdentityPaths = [
+  ['css', 'preprocessorOptions', 'scss', 'importer'],
+  ['css', 'preprocessorOptions', 'sass', 'importer'],
+  ['css', 'preprocessorOptions', 'scss', 'logger'],
+  ['css', 'preprocessorOptions', 'sass', 'logger'],
+  ['css', 'postcss', 'parser'],
+  ['css', 'postcss', 'stringifier'],
+  ['css', 'postcss', 'syntax'],
+  ['css', 'lightningcss', 'visitor'],
+] as const
+
+const configIdentityArrayPaths = [
+  ['css', 'preprocessorOptions', 'scss', 'importers'],
+  ['css', 'preprocessorOptions', 'sass', 'importers'],
+] as const
+
+type ConfigPath = readonly PropertyKey[]
+
+function matchesConfigPath(
+  path: ConfigPath,
+  expected: readonly string[],
+): boolean {
+  return (
+    path.length === expected.length &&
+    expected.every((segment, index) => path[index] === segment)
+  )
+}
+
+function shouldPreserveConfigIdentity(path: ConfigPath): boolean {
+  const key = path.at(-1)
+  return (
+    (typeof key === 'string' && configIdentityKeys.has(key)) ||
+    configIdentityPaths.some((expected) => matchesConfigPath(path, expected))
+  )
+}
+
+function shouldPreserveArrayEntryIdentity(path: ConfigPath): boolean {
+  return configIdentityArrayPaths.some((expected) =>
+    matchesConfigPath(path, expected),
+  )
+}
+
 function isPlainConfigObject(value: object): value is Record<string, unknown> {
   if (Object.prototype.toString.call(value) !== '[object Object]') {
     return false
@@ -36,7 +78,7 @@ function clonePluginOption(
 
 function cloneConfigValue(
   value: unknown,
-  key: PropertyKey | undefined,
+  path: ConfigPath,
   seen: WeakMap<object, unknown>,
   forceConfigContainer = false,
 ): unknown {
@@ -46,7 +88,7 @@ function cloneConfigValue(
 
   // These values are service/plugin instances rather than config containers.
   // Keep their identity while still copying the arrays that contain plugins.
-  if (typeof key === 'string' && configIdentityKeys.has(key)) {
+  if (shouldPreserveConfigIdentity(path)) {
     return value
   }
 
@@ -57,7 +99,7 @@ function cloneConfigValue(
   }
 
   if (Array.isArray(value)) {
-    if (key === 'plugins') {
+    if (path.at(-1) === 'plugins') {
       return clonePluginOption(value, seen)
     }
 
@@ -69,7 +111,11 @@ function cloneConfigValue(
     const cloned: unknown[] = []
     seen.set(value, cloned)
     for (const item of value) {
-      cloned.push(cloneConfigValue(item, undefined, seen))
+      cloned.push(
+        shouldPreserveArrayEntryIdentity(path)
+          ? item
+          : cloneConfigValue(item, path, seen),
+      )
     }
     return cloned
   }
@@ -100,7 +146,11 @@ function cloneConfigValue(
     if (!Object.getOwnPropertyDescriptor(configObject, property)?.enumerable) {
       continue
     }
-    cloned[property] = cloneConfigValue(configObject[property], property, seen)
+    cloned[property] = cloneConfigValue(
+      configObject[property],
+      [...path, property],
+      seen,
+    )
   }
   return cloned
 }
@@ -114,5 +164,5 @@ function cloneConfigValue(
  * as plain objects.
  */
 export function cloneConfig<T>(config: T): T {
-  return cloneConfigValue(config, undefined, new WeakMap(), true) as T
+  return cloneConfigValue(config, [], new WeakMap(), true) as T
 }
