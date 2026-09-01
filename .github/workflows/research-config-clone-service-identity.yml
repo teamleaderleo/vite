@@ -47,8 +47,13 @@ jobs:
           packages/vite/src/node/__tests__/config.spec.ts
 
       - name: Check changed source formatting
-        run: >-
-          pnpm exec oxfmt --check
-          packages/vite/src/node/configClone.ts
-          packages/vite/src/node/__tests__/configClone.spec.ts
-          packages/vite/src/node/__tests__/configResolveInputOwnership.spec.ts
+        shell: bash
+        run: |
+          files=(
+            packages/vite/src/node/configClone.ts
+            packages/vite/src/node/__tests__/configClone.spec.ts
+            packages/vite/src/node/__tests__/configResolveInputOwnership.spec.ts
+          )
+          pnpm exec oxfmt "${files[@]}"
+          git diff --check
+          git diff --exit-code -- "${files[@]}"
