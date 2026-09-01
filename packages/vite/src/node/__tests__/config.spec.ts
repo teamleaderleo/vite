@@ -2224,3 +2224,81 @@ describe('resolveServerOptions', () => {
     }
   })
 })
+
+test('does not duplicate optimizer plugins when resolving the same inline config twice', async () => {
+  const optimizerPlugin = {
+    name: 'test:resolve-config-idempotence',
+  }
+
+  const inlineConfig: InlineConfig = {
+    configFile: false,
+    logLevel: 'silent',
+    optimizeDeps: {
+      rolldownOptions: {
+        plugins: [optimizerPlugin],
+      },
+    },
+  }
+
+  const first = await resolveConfig(inlineConfig, 'serve')
+  const second = await resolveConfig(inlineConfig, 'serve')
+
+  expect(first.environments.client.optimizeDepsPluginNames).toEqual([
+    optimizerPlugin.name,
+  ])
+  expect(second.environments.client.optimizeDepsPluginNames).toEqual([
+    optimizerPlugin.name,
+  ])
+})
+
+test('does not mutate caller-owned config while resolving', async () => {
+  const conditions = ['source']
+  const rolldownOptions = {}
+  const optimizeDeps = Object.freeze({ rolldownOptions })
+  const inlineConfig: InlineConfig = {
+    configFile: false,
+    logLevel: 'silent',
+    optimizeDeps,
+    resolve: { conditions },
+    plugins: [
+      {
+        name: 'test:mutate-config-hook-input',
+        config(config) {
+          config.resolve ??= {}
+          config.resolve.conditions ??= []
+          config.resolve.conditions.push('from-hook')
+          config.define ??= {}
+          config.define.__FROM_HOOK__ = 'true'
+        },
+      },
+    ],
+  }
+
+  await resolveConfig(inlineConfig, 'serve')
+
+  expect(conditions).toEqual(['source'])
+  expect(inlineConfig.define).toBeUndefined()
+  expect(Object.keys(optimizeDeps)).toEqual(['rolldownOptions'])
+  expect(
+    Object.getOwnPropertyDescriptor(optimizeDeps, 'rollupOptions')?.get,
+  ).toBeUndefined()
+  expect(inlineConfig.optimizeDeps?.rolldownOptions).toBe(rolldownOptions)
+})
+
+test('preserves caller-owned server instances while resolving config', async () => {
+  const wsServer = http.createServer()
+  try {
+    const resolved = await resolveConfig(
+      {
+        configFile: false,
+        logLevel: 'silent',
+        server: { ws: { server: wsServer } },
+      },
+      'serve',
+    )
+
+    expect(resolved.server.ws?.server).toBe(wsServer)
+  } finally {
+    wsServer.removeAllListeners()
+  }
+})
