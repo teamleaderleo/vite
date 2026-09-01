@@ -1,5 +1,7 @@
+import http from 'node:http'
 import { expect, test } from 'vitest'
 import { cloneConfig } from '../configClone'
+import { deepClone } from '../utils'
 
 test('clones mutable config containers', () => {
   const config = { resolve: { conditions: ['source'] } }
@@ -86,6 +88,35 @@ test('retains opaque values and service-object identity', () => {
   expect(cloned.server.https).not.toBe(config.server.https)
   expect(cloned.server.https.cert).toBe(binary)
   expect(cloned.experimental.custom).toBe(custom)
+})
+
+test('existing deepClone rejects opaque inline-config values', () => {
+  const cert = Buffer.from([1, 2, 3])
+
+  expect(() => deepClone({ server: { https: { cert } } })).toThrow(
+    'Cannot deep clone non-plain object',
+  )
+})
+
+test('existing deepClone recreates caller-owned server instances', () => {
+  const wsServer = http.createServer()
+  const cloned = deepClone({ server: { ws: { server: wsServer } } })
+
+  expect(cloned.server.ws.server).not.toBe(wsServer)
+  expect(cloned.server.ws.server).not.toBeInstanceOf(http.Server)
+})
+
+test('existing deepClone flattens class-based plugins', () => {
+  class ClassPlugin {
+    name = 'test:class-plugin'
+    config() {}
+  }
+  const plugin = new ClassPlugin()
+  const cloned = deepClone({ plugins: [plugin] })
+
+  expect(cloned.plugins[0]).not.toBe(plugin)
+  expect(cloned.plugins[0]).not.toBeInstanceOf(ClassPlugin)
+  expect(cloned.plugins[0].config).toBeUndefined()
 })
 
 test('preserves regexp state while cloning regexp identity', () => {
