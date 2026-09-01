@@ -87,22 +87,17 @@ jobs:
             raise SystemExit('resolveConfig start anchor missing')
           text = text.replace(old_start, new_start, 1)
 
-          old_shallow_copy = '''  // Resolver-generated environment defaults must not be written back into
-          // the inline config reused by server.restart().
-          config = {
-            ...config,
-            environments: Object.fromEntries(
-              Object.entries(config.environments ?? {}).map(([name, environment]) => [
-                name,
-                environment ? { ...environment } : environment,
-              ]),
-            ),
-          }
-
-          '''
-          if old_shallow_copy not in text:
-            raise SystemExit('existing shallow-copy patch missing')
-          text = text.replace(old_shallow_copy, '', 1)
+          shallow_start_marker = (
+            '  // Resolver-generated environment defaults must not be written back into\n'
+          )
+          next_section_marker = '  // Ensure default client and ssr environments\n'
+          shallow_start = text.find(shallow_start_marker)
+          if shallow_start == -1:
+            raise SystemExit('existing shallow-copy patch start missing')
+          shallow_end = text.find(next_section_marker, shallow_start)
+          if shallow_end == -1:
+            raise SystemExit('environment-default section missing')
+          text = text[:shallow_start] + text[shallow_end:]
           config_path.write_text(text)
 
           test_path = Path(
