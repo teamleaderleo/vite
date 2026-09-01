@@ -22,7 +22,9 @@ test('preserves nested plugin-defined service objects', async () => {
       },
     ],
   } satisfies InlineConfig & {
-    server: NonNullable<InlineConfig['server']> & { customService: typeof service }
+    server: NonNullable<InlineConfig['server']> & {
+      customService: typeof service
+    }
   }
 
   const resolved = await resolveConfig(inlineConfig, 'serve')
