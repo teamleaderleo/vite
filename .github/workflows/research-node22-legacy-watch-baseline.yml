@@ -1,0 +1,75 @@
+name: Research Node 22 Legacy Watch Baseline
+
+permissions: {}
+
+env:
+  NODE_OPTIONS: --max-old-space-size=6144
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+  VITEST_SEGFAULT_RETRY: 3
+
+on:
+  push:
+    branches:
+      - research/config-ownership-node22-baseline
+  workflow_dispatch:
+
+jobs:
+  stress-legacy-watch:
+    name: Stress legacy watch build on Node 22
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - name: Set node version to 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: "pnpm"
+
+      - name: Install deps
+        run: pnpm install
+
+      - name: Set Playwright path and version
+        run: |
+          echo "PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/playwright-bin" >> $GITHUB_ENV
+          PLAYWRIGHT_VERSION="$(pnpm ls --depth 0 --json -w playwright-chromium | jq --raw-output '.[0].devDependencies["playwright-chromium"].version')"
+          echo "PLAYWRIGHT_VERSION=$PLAYWRIGHT_VERSION" >> $GITHUB_ENV
+
+      - name: Cache Playwright binary
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          key: ${{ runner.os }}-playwright-bin-v1-${{ env.PLAYWRIGHT_VERSION }}
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-bin-v1-
+
+      - name: Install Playwright
+        run: pnpm playwright install chromium
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Run legacy styles-only watch test 12 times
+        shell: bash
+        run: |
+          failures=0
+          for iteration in $(seq 1 12); do
+            echo "::group::Iteration ${iteration}"
+            if VITE_TEST_BUILD=1 pnpm exec vitest run -c vitest.config.e2e.ts playground/legacy/__tests__/watch/legacy-styles-only-entry-watch.spec.ts; then
+              echo "iteration ${iteration}: passed"
+            else
+              echo "iteration ${iteration}: failed"
+              failures=$((failures + 1))
+            fi
+            echo "::endgroup::"
+          done
+          echo "failures=${failures}"
+          test "${failures}" -eq 0
