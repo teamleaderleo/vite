@@ -1,6 +1,7 @@
 import { expect, test } from 'vitest'
 import type { InlineConfig } from '..'
 import { resolveConfig } from '../config'
+import { createLogger } from '../logger'
 
 test('does not write resolver working state into the caller inline config', async () => {
   const inlineConfig: InlineConfig = {
@@ -42,6 +43,28 @@ test('does not expose caller-owned nested config to direct config-hook mutation'
   expect(inlineConfig.define).toBeUndefined()
 })
 
+test('does not expose custom config fields to configResolved mutation', async () => {
+  const custom = { nested: { count: 0 } }
+  const inlineConfig = {
+    configFile: false,
+    logLevel: 'silent',
+    custom,
+    plugins: [
+      {
+        name: 'test:mutate-config-resolved-input',
+        configResolved(config: unknown) {
+          const resolved = config as { custom: typeof custom }
+          resolved.custom.nested.count++
+        },
+      },
+    ],
+  } satisfies InlineConfig & { custom: typeof custom }
+
+  await resolveConfig(inlineConfig, 'serve')
+
+  expect(custom.nested.count).toBe(0)
+})
+
 test('accepts opaque values nested in inline config', async () => {
   const cert = Buffer.from('test certificate bytes')
   const inlineConfig: InlineConfig = {
@@ -55,6 +78,19 @@ test('accepts opaque values nested in inline config', async () => {
   const resolved = await resolveConfig(inlineConfig, 'serve')
 
   expect(resolved.server.https?.cert).toBe(cert)
+})
+
+test('preserves custom logger identity', async () => {
+  const customLogger = createLogger('silent')
+  const inlineConfig: InlineConfig = {
+    configFile: false,
+    logLevel: 'silent',
+    customLogger,
+  }
+
+  const resolved = await resolveConfig(inlineConfig, 'serve')
+
+  expect(resolved.logger).toBe(customLogger)
 })
 
 test('preserves class-based plugin hooks and plugin identity', async () => {
