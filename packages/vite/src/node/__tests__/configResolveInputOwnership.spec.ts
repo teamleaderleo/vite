@@ -29,35 +29,50 @@ test('keeps repeated config resolution idempotent', async () => {
   ])
 })
 
+test('resolves a frozen inline config root', async () => {
+  const inlineConfig = Object.freeze({
+    configFile: false,
+    logLevel: 'silent' as const,
+  })
+
+  const resolved = await resolveConfig(inlineConfig, 'serve')
+
+  expect(resolved.inlineConfig).toBe(inlineConfig)
+})
+
 test('keeps Vite resolver writes out of caller-owned option containers', async () => {
   const optimizerPlugin = { name: 'test:optimizer-plugin' }
-  const optimizerOutput = {}
+  const optimizerOutput = Object.freeze({})
   const optimizerRolldownOptions = {
     output: optimizerOutput,
     plugins: [optimizerPlugin],
   }
-  const optimizerEsbuildOptions = {}
+  const optimizerEsbuildOptions = Object.freeze({})
   const optimizeDeps = Object.freeze({
     rolldownOptions: optimizerRolldownOptions,
     esbuildOptions: optimizerEsbuildOptions,
   })
-  const resolveOptions = {
+  const resolveOptions = Object.freeze({
     conditions: ['source'],
     mainFields: ['module'],
-  }
-  const clientDev = {}
-  const ssrBuild = {}
-  const hmr = { port: 24678 }
-  const lightningcss = {}
+  })
+  const clientDev = Object.freeze({})
+  const ssrBuild = Object.freeze({})
+  const hmr = Object.freeze({ port: 24678 })
+  const lightningcss = Object.freeze({})
   const serverAllowedHosts = ['example.test']
   const previewAllowedHosts = ['preview.example.test']
+  Object.freeze(serverAllowedHosts)
+  Object.freeze(previewAllowedHosts)
 
   const inlineConfig: InlineConfig = {
     configFile: false,
     logLevel: 'silent',
-    build: { ssrEmitAssets: true },
+    build: Object.freeze({ ssrEmitAssets: true }),
+    worker: Object.freeze({}),
     resolve: resolveOptions,
     optimizeDeps,
+    ssr: Object.freeze({ optimizeDeps: Object.freeze({}) }),
     css: { transformer: 'lightningcss', lightningcss },
     server: {
       hmr,
