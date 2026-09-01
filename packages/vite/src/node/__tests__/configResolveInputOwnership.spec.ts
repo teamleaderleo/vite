@@ -1,3 +1,4 @@
+import http from 'node:http'
 import { expect, test } from 'vitest'
 import type { InlineConfig } from '..'
 import { resolveConfig } from '../config'
@@ -124,6 +125,19 @@ test('accepts opaque values nested in inline config', async () => {
   const resolved = await resolveConfig(inlineConfig, 'serve')
 
   expect(resolved.server.https?.cert).toBe(cert)
+})
+
+test('preserves caller-owned server instances', async () => {
+  const wsServer = http.createServer()
+  const inlineConfig: InlineConfig = {
+    configFile: false,
+    logLevel: 'silent',
+    server: { ws: { server: wsServer } },
+  }
+
+  const resolved = await resolveConfig(inlineConfig, 'serve')
+
+  expect(resolved.server.ws?.server).toBe(wsServer)
 })
 
 test('preserves custom logger identity', async () => {
