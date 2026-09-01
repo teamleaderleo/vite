@@ -17,6 +17,17 @@ test('does not write resolver working state into the caller inline config', asyn
   })
 })
 
+test('accepts frozen caller config containers', async () => {
+  const optimizeDeps = Object.freeze({ rolldownOptions: {} })
+  const inlineConfig: InlineConfig = {
+    configFile: false,
+    logLevel: 'silent',
+    optimizeDeps,
+  }
+
+  await expect(resolveConfig(inlineConfig, 'serve')).resolves.toBeDefined()
+})
+
 test('does not install rollup compatibility state on caller options', async () => {
   const rollupOptions = {}
   const optimizeDeps = { rollupOptions }
