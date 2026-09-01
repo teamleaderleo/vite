@@ -59,6 +59,7 @@ test('copies plugin arrays while retaining plugin objects', () => {
 
 test('retains opaque values and service-object identity', () => {
   const binary = Buffer.from([1, 2, 3])
+  const nameCache = {}
   const logger = {
     info() {
       return undefined
@@ -90,6 +91,7 @@ test('retains opaque values and service-object identity', () => {
         },
       ],
     },
+    build: { terserOptions: { nameCache } },
     server: { https: { cert: binary } },
     experimental: { custom },
   }
@@ -100,6 +102,7 @@ test('retains opaque values and service-object identity', () => {
   expect(cloned.resolve.alias).not.toBe(config.resolve.alias)
   expect(cloned.resolve.alias[0]).not.toBe(config.resolve.alias[0])
   expect(cloned.resolve.alias[0].customResolver).toBe(customResolver)
+  expect(cloned.build.terserOptions.nameCache).toBe(nameCache)
   expect(cloned.server).not.toBe(config.server)
   expect(cloned.server.https).not.toBe(config.server.https)
   expect(cloned.server.https.cert).toBe(binary)
