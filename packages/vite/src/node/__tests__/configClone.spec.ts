@@ -1,7 +1,7 @@
 import http from 'node:http'
 import { expect, test } from 'vitest'
 import { cloneConfig } from '../configClone'
-import { deepClone } from '../utils'
+import { deepClone, mergeConfig } from '../utils'
 
 test('clones mutable config containers', () => {
   const config = { resolve: { conditions: ['source'] } }
@@ -90,6 +90,16 @@ test('retains opaque values and service-object identity', () => {
   expect(cloned.experimental.custom).toBe(custom)
 })
 
+test('mergeConfig with an empty base still shares unmatched nested config', () => {
+  const config = { resolve: { conditions: ['source'] } }
+  const merged = mergeConfig({}, config)
+
+  merged.resolve.conditions.push('mutated')
+
+  expect(merged.resolve).toBe(config.resolve)
+  expect(config.resolve.conditions).toEqual(['source', 'mutated'])
+})
+
 test('existing deepClone rejects opaque inline-config values', () => {
   const cert = Buffer.from([1, 2, 3])
 
@@ -104,6 +114,19 @@ test('existing deepClone recreates caller-owned server instances', () => {
 
   expect(cloned.server.ws.server).not.toBe(wsServer)
   expect(cloned.server.ws.server).not.toBeInstanceOf(http.Server)
+})
+
+test('existing deepClone clones plain custom logger identity', () => {
+  const logger = {
+    state: { count: 0 },
+    info() {
+      this.state.count++
+    },
+  }
+  const cloned = deepClone({ customLogger: logger })
+
+  expect(cloned.customLogger).not.toBe(logger)
+  expect(cloned.customLogger.state).not.toBe(logger.state)
 })
 
 test('existing deepClone flattens class-based plugins', () => {
