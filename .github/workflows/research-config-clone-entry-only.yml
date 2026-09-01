@@ -1,0 +1,88 @@
+name: Research Config Clone Entry Only
+
+permissions:
+  contents: write
+
+env:
+  NODE_OPTIONS: --max-old-space-size=6144
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+
+on:
+  push:
+    branches:
+      - research/config-clone-entry-only
+  workflow_dispatch:
+
+jobs:
+  entry-only:
+    name: Remove redundant environment copy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Remove environment-only copy workaround
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('packages/vite/src/node/config.ts')
+          text = path.read_text()
+          block = """  // Resolver-generated environment defaults must not be written back into
+          // the inline config reused by server.restart().
+          config = {
+            ...config,
+            environments: Object.fromEntries(
+              Object.entries(config.environments ?? {}).map(([name, environment]) => [
+                name,
+                environment ? { ...environment } : environment,
+              ]),
+            ),
+          }
+
+          """
+          if text.count(block) != 1:
+              raise SystemExit(f'expected one environment-copy block, found {text.count(block)}')
+          path.write_text(text.replace(block, ''))
+          PY
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - name: Set node version
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install deps
+        run: pnpm install
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Run config tests
+        run: >-
+          pnpm exec vitest run
+          packages/vite/src/node/__tests__/configClone.spec.ts
+          packages/vite/src/node/__tests__/configResolveInputOwnership.spec.ts
+          packages/vite/src/node/__tests__/config.spec.ts
+
+      - name: Check formatting
+        run: >-
+          pnpm exec oxfmt --check
+          packages/vite/src/node/config.ts
+          packages/vite/src/node/configClone.ts
+          packages/vite/src/node/__tests__/configClone.spec.ts
+          packages/vite/src/node/__tests__/configResolveInputOwnership.spec.ts
+
+      - name: Commit proven cleanup
+        run: |
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add packages/vite/src/node/config.ts
+          git commit -m "refactor: rely on entry config clone"
+          git push origin HEAD:research/config-clone-entry-only
