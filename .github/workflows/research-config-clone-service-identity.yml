@@ -36,6 +36,9 @@ jobs:
       - name: Install deps
         run: pnpm install
 
+      - name: Build
+        run: pnpm run build
+
       - name: Run config ownership tests
         run: >-
           pnpm exec vitest run
