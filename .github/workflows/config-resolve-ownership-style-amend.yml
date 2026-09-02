@@ -30,43 +30,32 @@ jobs:
 
           path = Path('packages/vite/src/node/config.ts')
           text = path.read_text()
-          old = """  const hasRollupOptionCompatProxy =
-            !!optimizeDeps?.rolldownOptions &&
-            optimizeDeps.rolldownOptions === optimizeDeps.rollupOptions
-          const merged = mergeWithDefaults(
-            {
-              ...configDefaults.optimizeDeps,
-              disabled: undefined, // do not set here to avoid deprecation warning
-              noDiscovery: consumer !== 'client',
-              force: forceOptimizeDeps ?? configDefaults.optimizeDeps.force,
-            },
-            optimizeDeps ?? {},
+          start_marker = '  const hasRollupOptionCompatProxy =\n'
+          end_marker = "  setupRollupOptionCompat(merged, 'optimizeDeps')\n"
+          if text.count(start_marker) != 1:
+            raise SystemExit(f'expected one optimizer compat start, found {text.count(start_marker)}')
+          start = text.index(start_marker)
+          end = text.index(end_marker, start)
+          replacement = (
+            '  let optimizeDepsForMerge = optimizeDeps\n'
+            '  if (\n'
+            '    optimizeDeps?.rolldownOptions &&\n'
+            '    optimizeDeps.rolldownOptions === optimizeDeps.rollupOptions\n'
+            '  ) {\n'
+            '    optimizeDepsForMerge = { ...optimizeDeps }\n'
+            '    delete optimizeDepsForMerge.rollupOptions\n'
+            '  }\n'
+            '  const merged = mergeWithDefaults(\n'
+            '    {\n'
+            '      ...configDefaults.optimizeDeps,\n'
+            '      disabled: undefined, // do not set here to avoid deprecation warning\n'
+            "      noDiscovery: consumer !== 'client',\n"
+            '      force: forceOptimizeDeps ?? configDefaults.optimizeDeps.force,\n'
+            '    },\n'
+            '    optimizeDepsForMerge ?? {},\n'
+            '  )\n'
           )
-          if (hasRollupOptionCompatProxy) {
-            merged.rollupOptions = merged.rolldownOptions
-          }
-          """
-          new = """  let optimizeDepsForMerge = optimizeDeps
-          if (
-            optimizeDeps?.rolldownOptions &&
-            optimizeDeps.rolldownOptions === optimizeDeps.rollupOptions
-          ) {
-            optimizeDepsForMerge = { ...optimizeDeps }
-            delete optimizeDepsForMerge.rollupOptions
-          }
-          const merged = mergeWithDefaults(
-            {
-              ...configDefaults.optimizeDeps,
-              disabled: undefined, // do not set here to avoid deprecation warning
-              noDiscovery: consumer !== 'client',
-              force: forceOptimizeDeps ?? configDefaults.optimizeDeps.force,
-            },
-            optimizeDepsForMerge ?? {},
-          )
-          """
-          if text.count(old) != 1:
-            raise SystemExit(f'expected one optimizer compat block, found {text.count(old)}')
-          path.write_text(text.replace(old, new, 1))
+          path.write_text(text[:start] + replacement + text[end:])
           PY
       - run: pnpm exec oxfmt --write packages/vite/src/node/config.ts
       - run: pnpm exec eslint packages/vite/src/node/config.ts
