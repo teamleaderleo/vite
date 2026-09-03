@@ -24,11 +24,14 @@ jobs:
           corepack enable
           corepack prepare pnpm@10.34.5 --activate
           pnpm install --frozen-lockfile
+      - name: Build repository before tests
+        id: repo_build
+        run: pnpm run build
       - name: Import v12 adversarial ownership tests
         run: |
           git fetch origin submit/config-resolve-input-ownership
           git show origin/submit/config-resolve-input-ownership:packages/vite/src/node/__tests__/configResolveInputOwnership.spec.ts > packages/vite/src/node/__tests__/configResolveInputOwnership.spec.ts
-      - name: Baseline current PR semantics
+      - name: Baseline current PR ownership suite
         id: baseline
         shell: bash
         run: |
@@ -37,7 +40,7 @@ jobs:
           status=${PIPESTATUS[0]}
           echo "ownership=$status" >> "$GITHUB_OUTPUT"
           exit 0
-      - name: Apply mergeConfig working-copy suggestion
+      - name: Apply typed mergeConfig working-copy suggestion
         run: |
           git checkout -- packages/vite/src/node/config.ts
           python - <<'PY'
@@ -45,7 +48,7 @@ jobs:
           path = Path('packages/vite/src/node/config.ts')
           text = path.read_text()
           old = '  let config = inlineConfig\n'
-          new = '  let config = mergeConfig({}, inlineConfig)\n'
+          new = '  let config: InlineConfig = mergeConfig({}, inlineConfig)\n'
           if text.count(old) != 1:
               raise SystemExit(f'expected one initial config assignment, found {text.count(old)}')
           path.write_text(text.replace(old, new, 1))
@@ -69,15 +72,6 @@ jobs:
           status=${PIPESTATUS[0]}
           echo "config_tests=$status" >> "$GITHUB_OUTPUT"
           exit 0
-      - name: mergeConfig plus existing PR clone - build
-        id: merge_build
-        shell: bash
-        run: |
-          set +e
-          pnpm run build 2>&1 | tee /tmp/merge-build.log
-          status=${PIPESTATUS[0]}
-          echo "build=$status" >> "$GITHUB_OUTPUT"
-          exit 0
       - name: mergeConfig plus existing PR clone - Vite typecheck
         id: merge_typecheck
         shell: bash
@@ -87,7 +81,7 @@ jobs:
           status=${PIPESTATUS[0]}
           echo "typecheck=$status" >> "$GITHUB_OUTPUT"
           exit 0
-      - name: Test mergeConfig as replacement for post-hook environment clone
+      - name: Test typed mergeConfig as replacement for post-hook environment clone
         id: merge_replace_clone
         shell: bash
         run: |
@@ -97,7 +91,7 @@ jobs:
           path = Path('packages/vite/src/node/config.ts')
           text = path.read_text()
           old = '  let config = inlineConfig\n'
-          new = '  let config = mergeConfig({}, inlineConfig)\n'
+          new = '  let config: InlineConfig = mergeConfig({}, inlineConfig)\n'
           if text.count(old) != 1:
               raise SystemExit(f'expected one initial config assignment, found {text.count(old)}')
           text = text.replace(old, new, 1)
@@ -133,12 +127,12 @@ jobs:
           cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
           ## mergeConfig({}, inlineConfig) ownership probe
 
-          | Variant | Ownership suite | Existing config tests | Build | Vite typecheck |
-          | --- | ---: | ---: | ---: | ---: |
-          | Current PR baseline | ${{ steps.baseline.outputs.ownership }} | - | - | - |
-          | mergeConfig + existing post-hook clone | ${{ steps.merge_keep_clone.outputs.ownership }} | ${{ steps.merge_config_tests.outputs.config_tests }} | ${{ steps.merge_build.outputs.build }} | ${{ steps.merge_typecheck.outputs.typecheck }} |
-          | mergeConfig replacing post-hook clone | ${{ steps.merge_replace_clone.outputs.ownership }} | - | - | - |
-          | v12 local copy-on-write positive control | ${{ steps.v12.outputs.ownership }} | - | - | - |
+          | Variant | Ownership suite | Existing config tests | Vite typecheck |
+          | --- | ---: | ---: | ---: |
+          | Current PR baseline | ${{ steps.baseline.outputs.ownership }} | - | - |
+          | typed mergeConfig + existing post-hook clone | ${{ steps.merge_keep_clone.outputs.ownership }} | ${{ steps.merge_config_tests.outputs.config_tests }} | ${{ steps.merge_typecheck.outputs.typecheck }} |
+          | typed mergeConfig replacing post-hook clone | ${{ steps.merge_replace_clone.outputs.ownership }} | - | - |
+          | v12 local copy-on-write positive control | ${{ steps.v12.outputs.ownership }} | - | - |
 
           Exit code 0 means the command passed.
           EOF
