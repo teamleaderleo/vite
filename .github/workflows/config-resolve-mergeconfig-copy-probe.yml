@@ -1,0 +1,144 @@
+name: Config resolve mergeConfig copy probe
+
+on:
+  push:
+    branches:
+      - experiment/config-resolve-mergeconfig-copy-probe
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: experiment/config-resolve-mergeconfig-copy-probe
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+      - name: Install dependencies
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.34.5 --activate
+          pnpm install --frozen-lockfile
+      - name: Import v12 adversarial ownership tests
+        run: |
+          git fetch origin submit/config-resolve-input-ownership
+          git show origin/submit/config-resolve-input-ownership:packages/vite/src/node/__tests__/configResolveInputOwnership.spec.ts > packages/vite/src/node/__tests__/configResolveInputOwnership.spec.ts
+      - name: Baseline current PR semantics
+        id: baseline
+        shell: bash
+        run: |
+          set +e
+          pnpm test-unit packages/vite/src/node/__tests__/configResolveInputOwnership.spec.ts 2>&1 | tee /tmp/baseline.log
+          status=${PIPESTATUS[0]}
+          echo "ownership=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Apply mergeConfig working-copy suggestion
+        run: |
+          git checkout -- packages/vite/src/node/config.ts
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('packages/vite/src/node/config.ts')
+          text = path.read_text()
+          old = '  let config = inlineConfig\n'
+          new = '  let config = mergeConfig({}, inlineConfig)\n'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one initial config assignment, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          git diff -- packages/vite/src/node/config.ts
+      - name: mergeConfig plus existing PR clone - ownership suite
+        id: merge_keep_clone
+        shell: bash
+        run: |
+          set +e
+          pnpm test-unit packages/vite/src/node/__tests__/configResolveInputOwnership.spec.ts 2>&1 | tee /tmp/merge-keep-clone.log
+          status=${PIPESTATUS[0]}
+          echo "ownership=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: mergeConfig plus existing PR clone - existing config tests
+        id: merge_config_tests
+        shell: bash
+        run: |
+          set +e
+          pnpm test-unit packages/vite/src/node/__tests__/config.spec.ts 2>&1 | tee /tmp/merge-config-tests.log
+          status=${PIPESTATUS[0]}
+          echo "config_tests=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: mergeConfig plus existing PR clone - build
+        id: merge_build
+        shell: bash
+        run: |
+          set +e
+          pnpm run build 2>&1 | tee /tmp/merge-build.log
+          status=${PIPESTATUS[0]}
+          echo "build=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: mergeConfig plus existing PR clone - Vite typecheck
+        id: merge_typecheck
+        shell: bash
+        run: |
+          set +e
+          pnpm --filter vite typecheck 2>&1 | tee /tmp/merge-typecheck.log
+          status=${PIPESTATUS[0]}
+          echo "typecheck=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Test mergeConfig as replacement for post-hook environment clone
+        id: merge_replace_clone
+        shell: bash
+        run: |
+          git checkout -- packages/vite/src/node/config.ts
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('packages/vite/src/node/config.ts')
+          text = path.read_text()
+          old = '  let config = inlineConfig\n'
+          new = '  let config = mergeConfig({}, inlineConfig)\n'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one initial config assignment, found {text.count(old)}')
+          text = text.replace(old, new, 1)
+          clone_block = '''  // Resolver-generated environment defaults must not be written back into\n  // the inline config reused by server.restart().\n  config = {\n    ...config,\n    environments: Object.fromEntries(\n      Object.entries(config.environments ?? {}).map(([name, environment]) => [\n        name,\n        environment ? { ...environment } : environment,\n      ]),\n    ),\n  }\n\n'''
+          if text.count(clone_block) != 1:
+              raise SystemExit(f'expected one post-hook environment clone block, found {text.count(clone_block)}')
+          path.write_text(text.replace(clone_block, '', 1))
+          PY
+          set +e
+          pnpm test-unit packages/vite/src/node/__tests__/configResolveInputOwnership.spec.ts 2>&1 | tee /tmp/merge-replace-clone.log
+          status=${PIPESTATUS[0]}
+          echo "ownership=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: v12 submit branch positive control
+        id: v12
+        shell: bash
+        run: |
+          git checkout origin/submit/config-resolve-input-ownership -- \
+            packages/vite/src/node/config.ts \
+            packages/vite/src/node/utils.ts \
+            packages/vite/src/node/server/index.ts \
+            packages/vite/src/node/preview.ts \
+            packages/vite/src/node/plugins/css.ts \
+            packages/vite/src/node/__tests__/configResolveInputOwnership.spec.ts
+          set +e
+          pnpm test-unit packages/vite/src/node/__tests__/configResolveInputOwnership.spec.ts 2>&1 | tee /tmp/v12.log
+          status=${PIPESTATUS[0]}
+          echo "ownership=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Probe summary
+        if: always()
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## mergeConfig({}, inlineConfig) ownership probe
+
+          | Variant | Ownership suite | Existing config tests | Build | Vite typecheck |
+          | --- | ---: | ---: | ---: | ---: |
+          | Current PR baseline | ${{ steps.baseline.outputs.ownership }} | - | - | - |
+          | mergeConfig + existing post-hook clone | ${{ steps.merge_keep_clone.outputs.ownership }} | ${{ steps.merge_config_tests.outputs.config_tests }} | ${{ steps.merge_build.outputs.build }} | ${{ steps.merge_typecheck.outputs.typecheck }} |
+          | mergeConfig replacing post-hook clone | ${{ steps.merge_replace_clone.outputs.ownership }} | - | - | - |
+          | v12 local copy-on-write positive control | ${{ steps.v12.outputs.ownership }} | - | - | - |
+
+          Exit code 0 means the command passed.
+          EOF
