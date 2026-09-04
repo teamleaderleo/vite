@@ -24,6 +24,24 @@ import {
 } from '../utils'
 
 describe('mergeConfig', () => {
+  test('keeps environment build compatibility writes out of merge overrides', () => {
+    const build = Object.freeze({})
+    const inlineConfig: InlineConfig = {
+      environments: { client: { build } },
+    }
+
+    const merged = mergeConfig({}, inlineConfig)
+    const mergedBuild = merged.environments.client.build!
+
+    expect(mergedBuild).not.toBe(build)
+    expect(
+      Object.getOwnPropertyDescriptor(mergedBuild, 'rollupOptions')?.get,
+    ).toBeTypeOf('function')
+    expect(
+      Object.getOwnPropertyDescriptor(build, 'rollupOptions'),
+    ).toBeUndefined()
+  })
+
   test('handles configs with different alias schemas', () => {
     const baseConfig = defineConfig({
       resolve: {
@@ -2248,4 +2266,37 @@ describe('resolveServerOptions', () => {
       warnFn.mockClear()
     }
   })
+})
+
+test('keeps repeated optimizer plugin compatibility idempotent', async () => {
+  const optimizerPlugin = { name: 'test:resolve-config-idempotence' }
+  const optimizerPlugins = [optimizerPlugin]
+  Object.freeze(optimizerPlugins)
+  const esbuildPlugin = {
+    name: 'test:esbuild-compat',
+    setup(build: unknown) {
+      void build
+    },
+  }
+  const inlineConfig: InlineConfig = {
+    configFile: false,
+    logLevel: 'silent',
+    optimizeDeps: {
+      rolldownOptions: { plugins: optimizerPlugins },
+      esbuildOptions: { plugins: [esbuildPlugin] },
+    },
+  }
+
+  const first = await resolveConfig(inlineConfig, 'serve')
+  const second = await resolveConfig(inlineConfig, 'serve')
+
+  expect(first.environments.client.optimizeDepsPluginNames).toEqual([
+    optimizerPlugin.name,
+    esbuildPlugin.name,
+  ])
+  expect(second.environments.client.optimizeDepsPluginNames).toEqual([
+    optimizerPlugin.name,
+    esbuildPlugin.name,
+  ])
+  expect(optimizerPlugins).toEqual([optimizerPlugin])
 })
