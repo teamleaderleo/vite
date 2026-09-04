@@ -60,9 +60,9 @@ jobs:
       - name: Run the same cache control against upstream
         shell: bash
         run: |
-          set -uo pipefail
-          pnpm exec vitest run packages/vite/src/node/__tests__/optimizer/configRestart.spec.ts --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/control/upstream-restart.json" 2>&1 | tee "$RUNNER_TEMP/control/upstream-restart.log"
-          code=$?
+          set -euo pipefail
+          code=0
+          pnpm exec vitest run packages/vite/src/node/__tests__/optimizer/configRestart.spec.ts --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/control/upstream-restart.json" 2>&1 | tee "$RUNNER_TEMP/control/upstream-restart.log" || code=$?
           test "$code" -ne 0
           python3 - <<'PY'
           import json, os
@@ -81,9 +81,9 @@ jobs:
       - name: Run frozen-input tests against upstream
         shell: bash
         run: |
-          set -uo pipefail
-          pnpm exec vitest run packages/vite/src/node/__tests__/configResolveInlineConfig.spec.ts --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/control/upstream-inline.json" 2>&1 | tee "$RUNNER_TEMP/control/upstream-inline.log"
-          code=$?
+          set -euo pipefail
+          code=0
+          pnpm exec vitest run packages/vite/src/node/__tests__/configResolveInlineConfig.spec.ts --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/control/upstream-inline.json" 2>&1 | tee "$RUNNER_TEMP/control/upstream-inline.log" || code=$?
           test "$code" -ne 0
           python3 - <<'PY'
           import json, os
