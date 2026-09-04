@@ -1,0 +1,207 @@
+name: Final inline config review 20260904
+
+on:
+  push:
+    branches:
+      - review/config-resolve-final-check-20260904-runner
+    paths:
+      - .github/workflows/config-inline-final-check-20260904.yml
+      - scripts/config-inline-final-check-20260904.py
+
+permissions: {}
+
+env:
+  NODE_OPTIONS: --max-old-space-size=6144
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+  SKIP_SIMPLE_GIT_HOOKS: '1'
+  BASE: 8492422b8f110625a90c702f42f30784e8cf19dc
+  SOURCE: 9a60f1fc1cb2ddc26a3f639bca4a84ec2ba3abee
+
+jobs:
+  prepare:
+    if: github.repository == 'teamleaderleo/vite'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    outputs:
+      head: ${{ steps.candidate.outputs.head }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - name: Prepare candidate on the pinned source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/final-review"
+          test "$(git ls-remote origin refs/heads/submit/config-resolve-idempotence | cut -f1)" = 0f97b9810022eef7a3fbf42788fb5db82586cee6
+          test "$(git ls-remote origin refs/heads/submit/config-resolve-input-ownership | cut -f1)" = fec8c31c8a27d59a7669b9ac180d3aa35d189897
+          git ls-remote https://github.com/vitejs/vite.git refs/heads/main | tee "$RUNNER_TEMP/final-review/upstream.txt"
+          git show "$GITHUB_SHA:scripts/config-inline-final-check-20260904.py" > "$RUNNER_TEMP/refine.py"
+          git switch --detach "$SOURCE"
+          python3 "$RUNNER_TEMP/refine.py"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Format and save the candidate
+        id: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec oxfmt packages/vite/src/node/__tests__/config.spec.ts packages/vite/src/node/__tests__/configResolveInlineConfig.spec.ts packages/vite/src/node/__tests__/optimizer/configRestart.spec.ts
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add packages/vite/src/node/__tests__
+          git -c commit.gpgsign=false commit --amend -m 'fix(config): keep resolver writes out of inline config'
+          BRANCH="review/config-resolve-final-20260904-$GITHUB_RUN_ID"
+          git branch "$BRANCH"
+          git push origin "HEAD:refs/heads/$BRANCH"
+          echo "head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          git rev-parse HEAD > "$RUNNER_TEMP/final-review/head.txt"
+          git rev-parse HEAD^ > "$RUNNER_TEMP/final-review/base.txt"
+          test "$(git rev-parse HEAD^)" = "$BASE"
+          git diff --exit-code "$SOURCE" -- packages/vite/src/node/config.ts packages/vite/src/node/utils.ts packages/vite/src/node/server/index.ts packages/vite/src/node/preview.ts packages/vite/src/node/plugins/css.ts
+          git diff --stat "$BASE" > "$RUNNER_TEMP/final-review/stat.txt"
+          git diff "$BASE" > "$RUNNER_TEMP/final-review/candidate.patch"
+          git format-patch -1 --stdout > "$RUNNER_TEMP/final-review/candidate.mbox"
+          git bundle create "$RUNNER_TEMP/final-review/candidate.bundle" "$BRANCH" "^$BASE"
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/final-review/candidate-source.tar.gz"
+      - name: Full repository lint
+        run: pnpm run lint
+      - name: Full repository formatting check
+        run: pnpm format && git diff --exit-code
+      - name: Build the repository
+        run: pnpm run build
+      - name: Vite typecheck
+        run: pnpm --filter vite run typecheck
+      - name: Focused config and optimizer tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run packages/vite/src/node/__tests__/config.spec.ts packages/vite/src/node/__tests__/configResolveInlineConfig.spec.ts packages/vite/src/node/__tests__/optimizer packages/vite/src/node/__tests__/plugins/terser.spec.ts --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/final-review/focused.json" 2>&1 | tee "$RUNNER_TEMP/final-review/focused.log"
+      - name: Record protected refs
+        if: always()
+        shell: bash
+        run: |
+          git ls-remote origin refs/heads/submit/config-resolve-idempotence refs/heads/submit/config-resolve-input-ownership refs/heads/review/config-resolve-inline-config-20260904 > "$RUNNER_TEMP/final-review/protected-refs.txt"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: final-config-source-${{ github.run_id }}
+          path: ${{ runner.temp }}/final-review
+          retention-days: 14
+
+  tests:
+    needs: prepare
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            node: '20'
+            browser: false
+          - os: ubuntu-latest
+            node: '22'
+            browser: false
+          - os: ubuntu-latest
+            node: '24'
+            browser: true
+          - os: ubuntu-latest
+            node: '26'
+            browser: false
+          - os: macos-latest
+            node: '24'
+            browser: true
+          - os: windows-latest
+            node: '24.15.0'
+            browser: true
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    name: Tests ${{ matrix.os }} Node ${{ matrix.node }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.prepare.outputs.head }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+      - name: Install and build
+        shell: bash
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
+          mkdir -p "$RUNNER_TEMP/final-review"
+          git rev-parse HEAD > "$RUNNER_TEMP/final-review/head.txt"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Full unit suite
+        id: unit
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --version | tee "$RUNNER_TEMP/final-review/node.txt"
+          pnpm exec vitest run --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/final-review/unit.json" 2>&1 | tee "$RUNNER_TEMP/final-review/unit.log"
+      - name: Install Chromium
+        if: matrix.browser
+        run: pnpm exec playwright install chromium
+      - name: Browser serve tests
+        id: serve
+        if: matrix.browser
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run -c vitest.config.e2e.ts playground/css-lightningcss/ playground/hmr/ playground/optimize-deps/ playground/fs-serve/ playground/worker/ playground/tsconfig-json/ --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/final-review/serve.json" 2>&1 | tee "$RUNNER_TEMP/final-review/serve.log"
+      - name: Browser bundled-dev tests
+        id: bundled
+        if: matrix.browser
+        continue-on-error: true
+        shell: bash
+        env:
+          VITE_TEST_BUNDLED_DEV: '1'
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run -c vitest.config.e2e.ts playground/css-lightningcss/ playground/hmr/ playground/optimize-deps/ playground/fs-serve/ playground/worker/ playground/tsconfig-json/ --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/final-review/bundled.json" 2>&1 | tee "$RUNNER_TEMP/final-review/bundled.log"
+      - name: Browser build and preview tests
+        id: build
+        if: matrix.browser
+        continue-on-error: true
+        shell: bash
+        env:
+          VITE_TEST_BUILD: '1'
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run -c vitest.config.e2e.ts playground/css-lightningcss/ playground/hmr/ playground/optimize-deps/ playground/fs-serve/ playground/worker/ playground/tsconfig-json/ --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/final-review/build.json" 2>&1 | tee "$RUNNER_TEMP/final-review/build.log"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: final-config-${{ matrix.os }}-node-${{ matrix.node }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/final-review
+          retention-days: 14
+      - name: Require every requested suite to pass
+        if: always()
+        shell: bash
+        env:
+          UNIT: ${{ steps.unit.outcome }}
+          SERVE: ${{ steps.serve.outcome }}
+          BUNDLED: ${{ steps.bundled.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          BROWSER: ${{ matrix.browser }}
+        run: |
+          test "$UNIT" = success
+          if [ "$BROWSER" = true ]; then
+            test "$SERVE" = success
+            test "$BUNDLED" = success
+            test "$BUILD" = success
+          fi
