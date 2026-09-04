@@ -14,6 +14,7 @@ test.each(['config', 'configEnvironment'] as const)(
     const rolldownOptions = Object.freeze({ transform, moduleTypes })
     const optimizeDeps = Object.freeze({
       rolldownOptions,
+      rollupOptions: rolldownOptions,
       esbuildOptions: Object.freeze({
         define: { __HOOK__: 'true' },
         loader: { '.txt': 'text' as const },
@@ -34,10 +35,10 @@ test.each(['config', 'configEnvironment'] as const)(
                 return { optimizeDeps }
               }
             },
-            configEnvironment(name) {
+            configEnvironment(name, config) {
               if (phase === 'configEnvironment' && name === 'client') {
                 hook()
-                return { optimizeDeps }
+                config.optimizeDeps = optimizeDeps
               }
             },
           },
@@ -49,6 +50,9 @@ test.each(['config', 'configEnvironment'] as const)(
     expect(hook).toHaveBeenCalledOnce()
     expect(transform).toEqual({})
     expect(moduleTypes).toEqual({})
+    expect(optimizeDeps.rollupOptions).toBe(rolldownOptions)
+    expect(optimizeDeps.rolldownOptions).toBe(rolldownOptions)
+    expect(resolved.optimizeDeps.rollupOptions).toBe(resolved.optimizeDeps.rolldownOptions)
     expect(resolved.optimizeDeps.rolldownOptions?.transform?.define).toEqual({
       __HOOK__: 'true',
     })
@@ -149,6 +153,38 @@ text = text.replace(anchor, '''  test('keeps HMR compatibility writes in the mer
   })
 
 ''' + anchor, 1)
+text += '''
+
+test('copies fs.allow before adding the pnpm virtual store', async () => {
+  const root = fs.mkdtempSync(
+    path.join(fs.realpathSync(os.tmpdir()), 'vite-config-fs-allow-'),
+  )
+  try {
+    fs.writeFileSync(path.join(root, 'package.json'), '{}')
+    fs.writeFileSync(path.join(root, 'pnpm-workspace.yaml'), 'packages: []')
+    fs.mkdirSync(path.join(root, 'node_modules'))
+    fs.writeFileSync(
+      path.join(root, 'node_modules', '.modules.yaml'),
+      JSON.stringify({ virtualStoreDir: '../store' }),
+    )
+    const allow = ['src']
+    Object.freeze(allow)
+    const server = await resolveServerOptions(
+      root,
+      { fs: { allow } },
+      createLogger('silent'),
+    )
+
+    expect(allow).toEqual(['src'])
+    expect(server.fs.allow).toEqual(expect.arrayContaining([
+      normalizePath(path.join(root, 'src')),
+      normalizePath(path.join(root, 'store')),
+    ]))
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+'''
 config.write_text(text)
 
 restart = root / 'optimizer/configRestart.spec.ts'
@@ -197,14 +233,17 @@ test('reuses the optimizer cache on restart and invalidates it when plugins chan
   let server: ViteDevServer | undefined
   try {
     server = await createServer(inlineConfig)
-    const first = server.environments.client.depsOptimizer!.metadata
+    const firstEnvironment = server.environments.client
+    const first = firstEnvironment.depsOptimizer!.metadata
     expect(first.optimized['restart-dep']).toBeDefined()
     expect(fs.existsSync(first.optimized['restart-dep'].file)).toBe(true)
     expect(buildStart).toHaveBeenCalled()
     buildStart.mockClear()
 
     await server.restart()
-    const second = server.environments.client.depsOptimizer!.metadata
+    const secondEnvironment = server.environments.client
+    expect(secondEnvironment).not.toBe(firstEnvironment)
+    const second = secondEnvironment.depsOptimizer!.metadata
     expect(server.config.inlineConfig).toBe(inlineConfig)
     expect(second.configHash).toBe(first.configHash)
     expect(second.hash).toBe(first.hash)
@@ -224,6 +263,7 @@ test('reuses the optimizer cache on restart and invalidates it when plugins chan
       },
     }
     await server.restart()
+    expect(server.environments.client).not.toBe(secondEnvironment)
     const third = server.environments.client.depsOptimizer!.metadata
     expect(third.configHash).not.toBe(first.configHash)
     expect(buildStart).toHaveBeenCalled()
