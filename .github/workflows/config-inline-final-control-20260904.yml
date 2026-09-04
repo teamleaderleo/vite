@@ -1,0 +1,96 @@
+name: Inline config current-main control 20260904
+
+on:
+  push:
+    branches:
+      - review/config-resolve-final-check-20260904-runner
+    paths:
+      - .github/workflows/config-inline-final-control-20260904.yml
+
+permissions:
+  contents: read
+
+jobs:
+  control:
+    if: github.repository == 'teamleaderleo/vite'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NODE_OPTIONS: --max-old-space-size=6144
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      SKIP_SIMPLE_GIT_HOOKS: '1'
+      BASE: 8492422b8f110625a90c702f42f30784e8cf19dc
+      CANDIDATE: 4ecd06029e8103f005c56d4dde54a85909a71989
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 4ecd06029e8103f005c56d4dde54a85909a71989
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+      - name: Prepare a mutable-input cache control
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/control"
+          git rev-parse HEAD > "$RUNNER_TEMP/control/candidate.txt"
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('packages/vite/src/node/__tests__/optimizer/configRestart.spec.ts')
+          s = p.read_text()
+          line = '  Object.freeze(optimizerPlugins)\n'
+          assert s.count(line) == 1
+          p.write_text(s.replace(line, ''))
+          PY
+          pnpm install --frozen-lockfile
+          pnpm run build
+      - name: Confirm cache control passes on the candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run packages/vite/src/node/__tests__/optimizer/configRestart.spec.ts --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/control/candidate-restart.json" 2>&1 | tee "$RUNNER_TEMP/control/candidate-restart.log"
+      - name: Restore and rebuild upstream production sources
+        shell: bash
+        run: |
+          git restore --source="$BASE" packages/vite/src/node/config.ts packages/vite/src/node/utils.ts packages/vite/src/node/server/index.ts packages/vite/src/node/preview.ts packages/vite/src/node/plugins/css.ts
+          pnpm run build
+          git diff --name-only > "$RUNNER_TEMP/control/changed-files.txt"
+      - name: Run the same cache control against upstream
+        shell: bash
+        run: |
+          set -uo pipefail
+          pnpm exec vitest run packages/vite/src/node/__tests__/optimizer/configRestart.spec.ts --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/control/upstream-restart.json" 2>&1 | tee "$RUNNER_TEMP/control/upstream-restart.log"
+          code=$?
+          test "$code" -ne 0
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          p = Path(os.environ['RUNNER_TEMP'], 'control/upstream-restart.json')
+          data = json.loads(p.read_text())
+          assert data['numFailedTests'] == 1
+          failures = '\n'.join(m for r in data['testResults'] for t in r['assertionResults'] for m in t['failureMessages'])
+          print(failures)
+          assert 'second.configHash' in failures, 'Expected the second resolution to change the optimizer config hash'
+          PY
+      - name: Run frozen-input tests against upstream
+        shell: bash
+        run: |
+          set -uo pipefail
+          pnpm exec vitest run packages/vite/src/node/__tests__/configResolveInlineConfig.spec.ts --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/control/upstream-inline.json" 2>&1 | tee "$RUNNER_TEMP/control/upstream-inline.log"
+          code=$?
+          test "$code" -ne 0
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          data = json.loads(Path(os.environ['RUNNER_TEMP'], 'control/upstream-inline.json').read_text())
+          assert data['numFailedTests'] > 0
+          print({k: data[k] for k in ['numPassedTests', 'numFailedTests', 'numPendingTests']})
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: inline-config-control-${{ github.run_id }}
+          path: ${{ runner.temp }}/control
+          retention-days: 14
