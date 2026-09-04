@@ -1,0 +1,244 @@
+name: Inline config review 20260904
+
+on:
+  push:
+    branches:
+      - review/config-resolve-inline-config-20260904-runner
+    paths:
+      - .github/workflows/config-inline-review-20260904.yml
+      - packages/vite/src/node/__tests__/configResolveInlineConfig.spec.ts
+
+permissions:
+  contents: write
+
+jobs:
+  review:
+    if: github.repository == 'teamleaderleo/vite'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      NODE_OPTIONS: --max-old-space-size=6144
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      SKIP_SIMPLE_GIT_HOOKS: '1'
+      BASE: 1c46db555d2927fc62686341911b03f6d365a36a
+      STAGING: fec8c31c8a27d59a7669b9ac180d3aa35d189897
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - name: Replay staging and apply the review changes
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/review-evidence"
+          test "$(git ls-remote origin refs/heads/submit/config-resolve-idempotence | cut -f1)" = 0f97b9810022eef7a3fbf42788fb5db82586cee6
+          test "$(git ls-remote origin refs/heads/submit/config-resolve-input-ownership | cut -f1)" = "$STAGING"
+          test "$(git ls-remote https://github.com/vitejs/vite.git refs/heads/main | cut -f1)" = "$BASE"
+          git show "$GITHUB_SHA:packages/vite/src/node/__tests__/configResolveInlineConfig.spec.ts" > "$RUNNER_TEMP/refined-inline-config.spec.ts"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch --no-tags https://github.com/vitejs/vite.git "$BASE"
+          REVIEW_BRANCH="review/config-resolve-inline-config-20260904-$GITHUB_RUN_ID"
+          echo "REVIEW_BRANCH=$REVIEW_BRANCH" >> "$GITHUB_ENV"
+          git switch -c "$REVIEW_BRANCH" "$STAGING"
+          git rebase --onto "$BASE" f40efefbb3630cdb7235286bc2b51673d9fbfc27 2>&1 | tee "$RUNNER_TEMP/review-evidence/rebase.log"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from textwrap import indent
+          root = Path('packages/vite/src/node')
+          old = root / '__tests__/configResolveInputOwnership.spec.ts'
+          text = old.read_text()
+          marker = "test('keeps environment build compatibility writes out of merge overrides', () => {"
+          assert text.count(marker) == 1
+          merge_test = marker + text.split(marker, 1)[1]
+          config_test = root / '__tests__/config.spec.ts'
+          text = config_test.read_text()
+          anchor = "describe('mergeConfig', () => {\n"
+          assert text.count(anchor) == 1
+          config_test.write_text(text.replace(anchor, anchor + indent(merge_test, '  ') + '\n', 1))
+          old.unlink()
+          (root / '__tests__/configResolveInlineConfig.spec.ts').write_text(Path(os.environ['RUNNER_TEMP'], 'refined-inline-config.spec.ts').read_text())
+          config = root / 'config.ts'
+          text = config.read_text()
+          old_comment = '// Vite replaces environment entries below, so own the map after config hooks.'
+          assert text.count(old_comment) == 1
+          config.write_text(text.replace(old_comment, '// Copy the environments map after config hooks before replacing entries below.'))
+          css = root / 'plugins/css.ts'
+          text = css.read_text()
+          old_condition = 'resolved.lightningcss?.targets === undefined'
+          assert text.count(old_condition) == 1
+          css.write_text(text.replace(old_condition, 'resolved.lightningcss?.targets == null'))
+          PY
+          git diff --check
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        id: install
+        shell: bash
+        run: |
+          set -euo pipefail
+          if pnpm install --frozen-lockfile > "$RUNNER_TEMP/review-evidence/install.log" 2>&1; then
+            tail -n 8 "$RUNNER_TEMP/review-evidence/install.log"
+          else
+            tail -n 100 "$RUNNER_TEMP/review-evidence/install.log"
+            exit 1
+          fi
+
+      - name: Format and save the clean review candidate
+        id: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff --name-only --diff-filter=ACM "$BASE" -- packages/vite)
+          pnpm exec oxfmt "${files[@]}"
+          pnpm exec oxfmt --check "${files[@]}"
+          git add -A packages/vite
+          git reset --soft "$BASE"
+          git commit -m 'fix(config): keep resolver writes out of inline config'
+          git diff --check "$BASE" HEAD
+          git diff --stat "$BASE" HEAD
+          git diff --binary "$BASE" HEAD > "$RUNNER_TEMP/review-evidence/candidate.patch"
+          git archive HEAD | gzip > "$RUNNER_TEMP/review-evidence/candidate-source.tar.gz"
+          git archive "$BASE" | gzip > "$RUNNER_TEMP/review-evidence/upstream-source.tar.gz"
+          printf 'base=%s\nstaging=%s\nhead=%s\nbranch=%s\n' "$BASE" "$STAGING" "$(git rev-parse HEAD)" "$REVIEW_BRANCH" | tee "$RUNNER_TEMP/review-evidence/refs.txt"
+          git push origin "HEAD:refs/heads/$REVIEW_BRANCH"
+
+      - name: Lint changed files
+        id: lint
+        if: always() && steps.candidate.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff --name-only --diff-filter=ACM "$BASE" HEAD -- packages/vite)
+          if pnpm exec eslint "${files[@]}" --concurrency auto > "$RUNNER_TEMP/review-evidence/lint.log" 2>&1; then
+            tail -n 10 "$RUNNER_TEMP/review-evidence/lint.log"
+          else
+            cat "$RUNNER_TEMP/review-evidence/lint.log"
+            exit 1
+          fi
+
+      - name: Full repository build
+        id: build
+        if: always() && steps.candidate.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if pnpm build > "$RUNNER_TEMP/review-evidence/build.log" 2>&1; then
+            tail -n 12 "$RUNNER_TEMP/review-evidence/build.log"
+          else
+            tail -n 100 "$RUNNER_TEMP/review-evidence/build.log"
+            exit 1
+          fi
+
+      - name: Vite typecheck
+        id: typecheck
+        if: always() && steps.build.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --filter vite run typecheck 2>&1 | tee "$RUNNER_TEMP/review-evidence/typecheck.log"
+
+      - name: Config, optimizer, and Terser tests
+        id: focused
+        if: always() && steps.build.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t extra < <(find packages/vite/src/node/__tests__ -type f \( -iname '*optim*.spec.ts' -o -iname '*terser*.spec.ts' \) | sort)
+          if pnpm test-unit packages/vite/src/node/__tests__/config.spec.ts packages/vite/src/node/__tests__/configResolveInlineConfig.spec.ts "${extra[@]}" --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/review-evidence/focused.json" > "$RUNNER_TEMP/review-evidence/focused.log" 2>&1; then
+            tail -n 18 "$RUNNER_TEMP/review-evidence/focused.log"
+          else
+            tail -n 150 "$RUNNER_TEMP/review-evidence/focused.log"
+            exit 1
+          fi
+
+      - name: Full unit suite
+        id: unit
+        if: always() && steps.build.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if pnpm test-unit --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/review-evidence/unit.json" > "$RUNNER_TEMP/review-evidence/unit.log" 2>&1; then
+            tail -n 18 "$RUNNER_TEMP/review-evidence/unit.log"
+          else
+            tail -n 150 "$RUNNER_TEMP/review-evidence/unit.log"
+            exit 1
+          fi
+
+      - name: Verify the new tests detect writes in current-main sources
+        id: control
+        if: always() && steps.focused.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          paths=(packages/vite/src/node/config.ts packages/vite/src/node/plugins/css.ts packages/vite/src/node/preview.ts packages/vite/src/node/server/index.ts packages/vite/src/node/utils.ts)
+          trap 'git restore --source=HEAD -- "${paths[@]}"' EXIT
+          git restore --source="$BASE" -- "${paths[@]}"
+          set +e
+          pnpm test-unit packages/vite/src/node/__tests__/configResolveInlineConfig.spec.ts --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/review-evidence/control.json" > "$RUNNER_TEMP/review-evidence/control.log" 2>&1
+          code=$?
+          set -e
+          test "$code" -ne 0
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          data = json.loads(Path(os.environ['RUNNER_TEMP'], 'review-evidence/control.json').read_text())
+          cases = [case for suite in data['testResults'] for case in suite['assertionResults']]
+          frozen = next(case for case in cases if case['title'] == 'resolves frozen early compatibility options while keeping the input unchanged')
+          assert frozen['status'] == 'failed', frozen
+          null_case = next(case for case in cases if case['title'] == 'defaults null Lightning CSS targets from JavaScript config')
+          assert null_case['status'] == 'passed', null_case
+          for case in cases:
+              print(case['status'].upper() + ': ' + case['title'])
+          print('Confirmed: frozen-input regression fails on current-main sources; existing null-target behavior passes.')
+          PY
+
+      - name: Confirm protected refs and record results
+        if: always()
+        shell: bash
+        env:
+          PREPARE: ${{ steps.prepare.outcome }}
+          INSTALL: ${{ steps.install.outcome }}
+          CANDIDATE: ${{ steps.candidate.outcome }}
+          LINT: ${{ steps.lint.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          TYPECHECK: ${{ steps.typecheck.outcome }}
+          FOCUSED: ${{ steps.focused.outcome }}
+          UNIT: ${{ steps.unit.outcome }}
+          CONTROL: ${{ steps.control.outcome }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/review-evidence"
+          git ls-remote origin refs/heads/submit/config-resolve-idempotence refs/heads/submit/config-resolve-input-ownership | tee "$RUNNER_TEMP/review-evidence/protected-refs.txt"
+          test "$(git ls-remote origin refs/heads/submit/config-resolve-idempotence | cut -f1)" = 0f97b9810022eef7a3fbf42788fb5db82586cee6
+          test "$(git ls-remote origin refs/heads/submit/config-resolve-input-ownership | cut -f1)" = "$STAGING"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          report = {key.lower(): os.environ[key] for key in ['PREPARE','INSTALL','CANDIDATE','LINT','BUILD','TYPECHECK','FOCUSED','UNIT','CONTROL']}
+          directory = Path(os.environ['RUNNER_TEMP'], 'review-evidence')
+          for name in ['focused', 'unit', 'control']:
+              path = directory / (name + '.json')
+              if path.exists():
+                  data = json.loads(path.read_text())
+                  report[name + '_counts'] = {key: data.get(key) for key in ['numPassedTests','numFailedTests','numPendingTests','numTotalTests']}
+          (directory / 'summary.json').write_text(json.dumps(report, indent=2) + '\n')
+          print(json.dumps(report, indent=2))
+          PY
+
+      - name: Upload review sources, patch, and validation logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: inline-config-review-${{ github.run_id }}
+          path: ${{ runner.temp }}/review-evidence
+          retention-days: 14
+          if-no-files-found: error
