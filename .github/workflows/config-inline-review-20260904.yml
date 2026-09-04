@@ -197,11 +197,11 @@ jobs:
           cases = [case for suite in data['testResults'] for case in suite['assertionResults']]
           frozen = next(case for case in cases if case['title'] == 'resolves frozen early compatibility options while keeping the input unchanged')
           assert frozen['status'] == 'failed', frozen
-          null_case = next(case for case in cases if case['title'] == 'defaults null Lightning CSS targets from JavaScript config')
-          assert null_case['status'] == 'passed', null_case
+          explicit = next(case for case in cases if case['title'] == 'keeps explicit Lightning CSS targets shared through resolution')
+          assert explicit['status'] == 'passed', explicit
           for case in cases:
               print(case['status'].upper() + ': ' + case['title'])
-          print('Confirmed: frozen-input regression fails on current-main sources; existing null-target behavior passes.')
+          print('Confirmed: frozen-input regression fails on current-main sources; explicit-target identity control passes.')
           PY
 
       - name: Confirm protected refs and record results
