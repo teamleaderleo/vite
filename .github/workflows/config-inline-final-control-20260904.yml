@@ -71,8 +71,12 @@ jobs:
           data = json.loads(p.read_text())
           assert data['numFailedTests'] == 1
           failures = '\n'.join(m for r in data['testResults'] for t in r['assertionResults'] for m in t['failureMessages'])
+          source = Path('packages/vite/src/node/__tests__/optimizer/configRestart.spec.ts')
+          lines = [i for i, line in enumerate(source.read_text().splitlines(), 1) if 'expect(second.configHash)' in line]
+          assert len(lines) == 1
+          assert f'configRestart.spec.ts:{lines[0]}:' in failures, failures
+          print('Upstream changed the config hash on the second resolution:')
           print(failures)
-          assert 'second.configHash' in failures, 'Expected the second resolution to change the optimizer config hash'
           PY
       - name: Run frozen-input tests against upstream
         shell: bash
