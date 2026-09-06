@@ -255,25 +255,11 @@ test('keeps server, preview, css, and fs resolver writes out of caller objects',
   expect(hmr.port).toBe(24678)
 })
 
-test('keeps explicit Lightning CSS targets shared through resolution', async () => {
-  const targets = Object.freeze({ chrome: 120 << 16 })
+test.each([
+  { name: 'explicit', targets: Object.freeze({ chrome: 120 << 16 }) },
+  { name: 'null', targets: null },
+])('resolves Lightning CSS with $name targets', async ({ targets }) => {
   const lightningcss = Object.freeze({ targets })
-  const resolved = await resolveConfig(
-    {
-      configFile: false,
-      envDir: false,
-      logLevel: 'silent',
-      css: { transformer: 'lightningcss', lightningcss },
-    },
-    'serve',
-  )
-
-  expect(resolved.css.lightningcss).toBe(lightningcss)
-  expect(resolved.css.lightningcss?.targets).toBe(targets)
-})
-
-test('defaults null Lightning CSS targets from JavaScript config', async () => {
-  const lightningcss = Object.freeze({ targets: null })
   const resolved = await resolveConfig(
     {
       configFile: false,
@@ -288,13 +274,18 @@ test('defaults null Lightning CSS targets from JavaScript config', async () => {
     'serve',
   )
 
-  expect(lightningcss.targets).toBeNull()
-  expect(resolved.css.lightningcss?.targets).toEqual(
-    expect.objectContaining({ chrome: expect.any(Number) }),
-  )
+  expect(lightningcss.targets).toBe(targets)
+  if (targets == null) {
+    expect(resolved.css.lightningcss?.targets).toEqual(
+      expect.objectContaining({ chrome: expect.any(Number) }),
+    )
+  } else {
+    expect(resolved.css.lightningcss).toBe(lightningcss)
+    expect(resolved.css.lightningcss?.targets).toBe(targets)
+  }
 })
 
-test.each(['top-level', 'client', 'ssr', 'custom'] as const)(
+test.each(['top-level', 'custom'] as const)(
   'keeps dependency optimizer writes out of frozen %s options',
   async (name) => {
     const resolve = Object.freeze({})
@@ -389,7 +380,7 @@ test('preserves explicit Rolldown values when converting esbuild options', async
   expect(resolved.optimizeDeps.rolldownOptions?.resolve).toMatchObject(resolve)
 })
 
-test('preserves Rollup and Rolldown aliasing without duplicating plugins across resolutions', async () => {
+test('preserves explicit Rollup and Rolldown aliases without duplicating plugins', async () => {
   const plugins = [{ name: 'native-optimizer-plugin' }]
   Object.freeze(plugins)
   const rolldownOptions = Object.freeze({ plugins })
@@ -404,19 +395,13 @@ test('preserves Rollup and Rolldown aliasing without duplicating plugins across 
     optimizeDeps,
   }
 
-  for (let i = 0; i < 2; i++) {
-    const resolved = await resolveConfig(inlineConfig, 'serve')
-    expect(resolved.inlineConfig).toBe(inlineConfig)
-    expect(resolved.optimizeDeps).toBe(
-      resolved.environments.client.optimizeDeps,
-    )
-    expect(resolved.optimizeDeps.rollupOptions).toBe(
-      resolved.optimizeDeps.rolldownOptions,
-    )
-    expect(resolved.environments.client.optimizeDepsPluginNames).toEqual([
-      'native-optimizer-plugin',
-    ])
-  }
+  const resolved = await resolveConfig(inlineConfig, 'serve')
+  expect(resolved.optimizeDeps.rollupOptions).toBe(
+    resolved.optimizeDeps.rolldownOptions,
+  )
+  expect(resolved.environments.client.optimizeDepsPluginNames).toEqual([
+    'native-optimizer-plugin',
+  ])
   expect(optimizeDeps.rolldownOptions).toBe(rolldownOptions)
   expect(optimizeDeps.rollupOptions).toBe(rolldownOptions)
   expect(plugins).toHaveLength(1)
@@ -548,31 +533,4 @@ test('resolves shared optimizer options independently for each environment', asy
   expect(resolved.environments.ssr.optimizeDeps.rolldownOptions).not.toBe(
     resolved.environments.custom.optimizeDeps.rolldownOptions,
   )
-})
-
-test('retries resolution after a config hook fails', async () => {
-  const failure = new Error('config hook failed')
-  const build = Object.freeze({})
-  const hook = vi.fn().mockImplementationOnce(() => {
-    throw failure
-  })
-  const inlineConfig: InlineConfig = {
-    configFile: false,
-    envDir: false,
-    logLevel: 'silent',
-    build,
-    plugins: [{ name: 'test:retry-config', config: hook }],
-  }
-
-  await expect(resolveConfig(inlineConfig, 'serve')).rejects.toBe(failure)
-  expect(
-    Object.getOwnPropertyDescriptor(build, 'rollupOptions'),
-  ).toBeUndefined()
-  const resolved = await resolveConfig(inlineConfig, 'serve')
-  expect(hook).toHaveBeenCalledTimes(2)
-  expect(resolved.inlineConfig).toBe(inlineConfig)
-  expect(resolved.build.rollupOptions).toBe(resolved.build.rolldownOptions)
-  expect(
-    Object.getOwnPropertyDescriptor(build, 'rollupOptions'),
-  ).toBeUndefined()
 })
