@@ -422,6 +422,36 @@ test('preserves Rollup and Rolldown aliasing without duplicating plugins across 
   expect(plugins).toHaveLength(1)
 })
 
+test('converts esbuild plugins when Rolldown plugins are disabled', async () => {
+  const rolldownOptions = Object.freeze({ plugins: false as const })
+  const inlineConfig: InlineConfig = {
+    configFile: false,
+    envDir: false,
+    logLevel: 'silent',
+    optimizeDeps: {
+      rolldownOptions,
+      esbuildOptions: {
+        plugins: [
+          {
+            name: 'test:esbuild-with-disabled-rolldown-plugins',
+            setup(build) {
+              void build
+            },
+          },
+        ],
+      },
+    },
+  }
+
+  for (let i = 0; i < 2; i++) {
+    const resolved = await resolveConfig(inlineConfig, 'serve')
+    expect(resolved.environments.client.optimizeDepsPluginNames).toEqual([
+      'test:esbuild-with-disabled-rolldown-plugins',
+    ])
+    expect(rolldownOptions.plugins).toBe(false)
+  }
+})
+
 test.each(['config', 'configEnvironment'] as const)(
   'copies optimizer options supplied by the %s hook before normalization',
   async (phase) => {
