@@ -44,7 +44,9 @@ async function createOptimizedServer(
 }
 
 test('isolates dependency caches for overlapping dev servers', async () => {
-  root = fs.mkdtempSync(path.join(os.tmpdir(), 'vite-shared-deps-cache-'))
+  root = fs.mkdtempSync(
+    path.join(fs.realpathSync(os.tmpdir()), 'vite-shared-deps-cache-'),
+  )
   const cacheDir = path.join(root, '.vite-shared')
   const depA = path.join(root, 'dep-a.js')
   const depB = path.join(root, 'dep-b.js')
